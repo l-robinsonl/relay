@@ -625,3 +625,95 @@ async fn an_unreachable_server_records_the_failure_and_keeps_local_data() {
         .unwrap();
     assert!(state.last_error.is_some(), "the failure was not recorded");
 }
+
+#[tokio::test]
+async fn a_change_by_one_device_wakes_the_other_over_the_websocket() {
+    use relay_app::sync::WatchEvent;
+
+    let server = start_server().await;
+
+    let alice = Client::new("ws-live", "Live").await;
+    alice.connect(&server, "alice11@example.com").await;
+    alice.create_remote(&server).await;
+
+    let bob = Client::new("ws-live", "Live").await;
+    bob.join(&server, "bob11@example.com").await;
+    let alice_token = alice.engine.token(&alice.workspace).unwrap();
+    let bob_id = bob.user_id_on(&server).await;
+    grant_editor(&server, &alice_token, "ws-live", &bob_id).await;
+
+    // Bob starts listening.
+    let (tx, mut rx) = tokio::sync::mpsc::channel(32);
+    let watcher = bob
+        .service
+        .sync_watch(bob.workspace.clone(), tx)
+        .await
+        .unwrap()
+        .expect("bob should get a watcher");
+
+    // The connection opens, and the current head arrives.
+    let first = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
+        .await
+        .expect("no connection event")
+        .unwrap();
+    assert_eq!(first.1, WatchEvent::Connected);
+
+    // Alice writes something.
+    alice
+        .service
+        .request_create(alice.workspace.clone(), "Live change".into(), None)
+        .await
+        .unwrap();
+    alice.sync().await;
+
+    // Bob is told, without polling. The server also sends the current
+    // head on connect — so this waits for one that is genuinely higher,
+    // not merely the opening greeting.
+    let mut highest = 0i64;
+    let mut advanced = false;
+
+    for _ in 0..6 {
+        let Ok(Some((workspace, event))) =
+            tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv()).await
+        else {
+            break;
+        };
+        assert_eq!(workspace, bob.workspace);
+
+        if let WatchEvent::Changed { seq } = event {
+            if seq > highest && highest > 0 {
+                advanced = true;
+                break;
+            }
+            highest = highest.max(seq);
+            // The greeting arrives before Alice has pushed, so head 0 is
+            // expected; keep waiting for the real change.
+            if highest > 0 {
+                advanced = true;
+                break;
+            }
+        }
+    }
+    assert!(advanced, "bob was never told the workspace changed");
+
+    // And acting on it brings the change across.
+    bob.sync().await;
+    assert_eq!(bob.requests().await.len(), 1);
+
+    drop(watcher);
+}
+
+#[tokio::test]
+async fn a_local_only_workspace_gets_no_watcher_and_that_is_not_an_error() {
+    let alice = Client::new("ws-nowatch", "No watch").await;
+
+    let (tx, _rx) = tokio::sync::mpsc::channel(4);
+    let watcher = alice
+        .service
+        .sync_watch(alice.workspace.clone(), tx)
+        .await
+        .unwrap();
+
+    // Running without a server is the ordinary case, not a failure.
+    assert!(watcher.is_none());
+}

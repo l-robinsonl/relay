@@ -24,6 +24,37 @@ use tauri::{Emitter, State};
 /// The event channel carrying in-flight request progress to the webview.
 pub const PROGRESS_EVENT: &str = "relay://exec-progress";
 
+/// The event channel telling the webview a workspace changed on the server.
+pub const SYNC_EVENT: &str = "relay://sync-changed";
+
+/// The live watchers, one per connected workspace.
+///
+/// Held in Tauri's state so a watcher survives the command that started
+/// it, and so switching workspace closes the previous socket rather than
+/// accumulating one per workspace the user has ever opened.
+#[derive(Default)]
+pub struct SyncWatchers {
+    inner: std::sync::Mutex<std::collections::HashMap<WorkspaceId, relay_app::sync::Watcher>>,
+}
+
+impl SyncWatchers {
+    /// Stores a watcher, replacing and closing any previous one.
+    pub fn insert(&self, workspace: WorkspaceId, watcher: relay_app::sync::Watcher) {
+        if let Ok(mut guard) = self.inner.lock() {
+            guard.insert(workspace, watcher);
+        }
+    }
+
+    /// Closes the watcher for a workspace, if there is one.
+    pub fn stop(&self, workspace: &WorkspaceId) {
+        if let Ok(mut guard) = self.inner.lock()
+            && let Some(watcher) = guard.remove(workspace)
+        {
+            watcher.stop();
+        }
+    }
+}
+
 /// Forwards engine progress to the frontend.
 struct WindowProgress {
     app: tauri::AppHandle,
@@ -450,6 +481,58 @@ pub async fn sync_disconnect(
     workspace_id: WorkspaceId,
 ) -> RelayResult<()> {
     service.sync_disconnect(workspace_id).await
+}
+
+/// Starts listening for changes to a workspace on its server.
+///
+/// Returns true when a connection was opened. False means the workspace
+/// is local-only or signed out, which is not a failure.
+#[tauri::command]
+pub async fn sync_watch(
+    app: tauri::AppHandle,
+    watchers: State<'_, SyncWatchers>,
+    service: State<'_, RelayService>,
+    workspace_id: WorkspaceId,
+) -> RelayResult<bool> {
+    // Replace any existing watcher for this workspace; dropping the old
+    // one closes its socket.
+    watchers.stop(&workspace_id);
+
+    let (tx, mut rx) = tokio::sync::mpsc::channel(32);
+    let Some(watcher) = service.sync_watch(workspace_id.clone(), tx).await? else {
+        return Ok(false);
+    };
+
+    watchers.insert(workspace_id, watcher);
+
+    tokio::spawn(async move {
+        while let Some((workspace, event)) = rx.recv().await {
+            let payload = match event {
+                relay_app::sync::WatchEvent::Changed { seq } => {
+                    serde_json::json!({ "workspaceId": workspace, "event": "changed", "seq": seq })
+                }
+                relay_app::sync::WatchEvent::Connected => {
+                    serde_json::json!({ "workspaceId": workspace, "event": "connected" })
+                }
+                relay_app::sync::WatchEvent::Disconnected => {
+                    serde_json::json!({ "workspaceId": workspace, "event": "disconnected" })
+                }
+            };
+
+            if let Err(error) = app.emit(SYNC_EVENT, payload) {
+                tracing::debug!("could not emit a sync event: {error}");
+                break;
+            }
+        }
+    });
+
+    Ok(true)
+}
+
+/// Stops listening for changes to a workspace.
+#[tauri::command]
+pub fn sync_unwatch(watchers: State<'_, SyncWatchers>, workspace_id: WorkspaceId) {
+    watchers.stop(&workspace_id);
 }
 
 /// Conflicts awaiting a decision.

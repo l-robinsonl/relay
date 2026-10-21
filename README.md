@@ -80,7 +80,8 @@ request tabs, resizable and re-orientable panes, drag-and-drop reordering, a
 command palette, keyboard shortcuts throughout, and local request history.
 
 **Synchronisation** — optional, per workspace. Connect to a server you run,
-sign in, and your collections follow you between machines. Edits made
+sign in, and your collections follow you between machines. Changes from a
+teammate arrive within moments over a live connection; edits you make
 offline upload when you reconnect. When two people change the same thing,
 you get both versions side by side and choose — nothing is overwritten on
 the strength of a timestamp. Secret values never leave your device.

@@ -149,6 +149,21 @@ that falls behind is not disconnected, because the next message corrects
 it. Membership is resolved *before* the upgrade, so a non-member never
 gets a socket at all.
 
+### The client side
+
+The desktop app holds the socket open while a synced workspace is open,
+reconnecting with exponential backoff and jitter — jitter because
+otherwise every client of a restarted server reconnects in the same
+instant, which is how a recovering server gets knocked over twice.
+
+A notification only schedules a sync, debounced by 400 ms so a burst of
+saves from several teammates costs one pass. A background sync is silent
+unless it finds a conflict: announcing every colleague's save would make
+the app unusable in a team.
+
+If the socket never connects, nothing breaks. Sync still works; it just
+waits for the next manual pass.
+
 ## Administrator bootstrap
 
 On an empty server, `RELAY_ADMIN_EMAIL` and `RELAY_ADMIN_PASSWORD` create

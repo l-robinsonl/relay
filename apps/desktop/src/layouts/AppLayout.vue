@@ -41,6 +41,7 @@ const importOpen = ref(false)
 const syncSettingsOpen = ref(false)
 const conflictsOpen = ref(false)
 let unlistenProgress: UnlistenFn | undefined
+let unlistenSync: UnlistenFn | undefined
 
 /** Pastes a cURL command from the clipboard into a new tab. */
 async function importCurlFromClipboard () {
@@ -236,12 +237,18 @@ onMounted(async () => {
   unlistenProgress = await tabs.watchProgress()
 
   await sync.refresh()
+  unlistenSync = await sync.listenForChanges()
+  await sync.watch()
 
   // Open something rather than greeting the user with a blank editor.
   if (!tabs.tabs.length) tabs.openDraft()
 })
 
-onBeforeUnmount(() => unlistenProgress?.())
+onBeforeUnmount(() => {
+  unlistenProgress?.()
+  unlistenSync?.()
+  void sync.unwatch()
+})
 </script>
 
 <template>

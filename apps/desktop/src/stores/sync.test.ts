@@ -9,10 +9,13 @@ const mocks = vi.hoisted(() => ({
   syncConnect: vi.fn(),
   syncDisconnect: vi.fn(),
   syncResolve: vi.fn(),
+  syncWatch: vi.fn(),
+  syncUnwatch: vi.fn(),
 }))
 
 vi.mock('@/services/ipc', () => ({
   api: mocks,
+  onSyncEvent: vi.fn().mockResolvedValue(() => {}),
   isRelayError: () => false,
   toRelayError: (e: unknown) => ({ kind: 'internal', message: String(e) }),
 }))
@@ -49,6 +52,8 @@ beforeEach(() => {
   setActivePinia(createPinia())
   vi.clearAllMocks()
   mocks.syncConflicts.mockResolvedValue([])
+  mocks.syncWatch.mockResolvedValue(true)
+  mocks.syncUnwatch.mockResolvedValue(undefined)
 })
 
 describe('the sync indicator', () => {
@@ -219,5 +224,95 @@ describe('resolving', () => {
 
     expect(mocks.syncResolve).toHaveBeenCalledWith('conflict-1', true)
     expect(refreshTree).toHaveBeenCalled()
+  })
+})
+
+
+describe('live updates', () => {
+  it('reports when the live connection is open', async () => {
+    mocks.syncStatus.mockResolvedValue(status())
+    const sync = useSyncStore()
+    await sync.refresh()
+    await sync.watch()
+
+    expect(sync.live).toBe(true)
+  })
+
+  it('treats a watch failure as merely not-live, not an error', async () => {
+    // Live updates are an optimisation; manual sync still works.
+    mocks.syncStatus.mockResolvedValue(status())
+    mocks.syncWatch.mockRejectedValue(new Error('no socket'))
+
+    const sync = useSyncStore()
+    await sync.refresh()
+    await sync.watch()
+
+    expect(sync.live).toBe(false)
+    expect(sync.phase).toBe('idle')
+  })
+
+  it('a background sync says nothing when it merely pulls', async () => {
+    mocks.syncStatus.mockResolvedValue(status())
+    mocks.syncNow.mockResolvedValue({
+      pulled: 2,
+      pushed: 0,
+      conflicts: 0,
+      rejected: 0,
+      head: 9,
+    })
+
+    const sync = useSyncStore()
+    await sync.refresh()
+    await sync.syncQuietly()
+
+    // Announcing every teammate's save would be unusable in a team.
+    const toasts = (await import('@/stores/toast')).useToastStore()
+    expect(toasts.items).toHaveLength(0)
+    expect(refreshTree).toHaveBeenCalled()
+  })
+
+  it('a background sync does speak up about a conflict', async () => {
+    mocks.syncStatus.mockResolvedValue(status())
+    mocks.syncNow.mockResolvedValue({
+      pulled: 1,
+      pushed: 0,
+      conflicts: 1,
+      rejected: 0,
+      head: 9,
+    })
+
+    const sync = useSyncStore()
+    await sync.refresh()
+    await sync.syncQuietly()
+
+    const toasts = (await import('@/stores/toast')).useToastStore()
+    expect(toasts.items.length).toBeGreaterThan(0)
+    expect(toasts.items[0]!.message).toContain('conflict')
+  })
+
+  it('a failed background sync stays silent and stops spinning', async () => {
+    mocks.syncStatus.mockResolvedValue(status())
+    mocks.syncNow.mockRejectedValue({ kind: 'sync', message: 'unreachable' })
+
+    const sync = useSyncStore()
+    await sync.refresh()
+    await sync.syncQuietly()
+
+    const toasts = (await import('@/stores/toast')).useToastStore()
+    expect(toasts.items).toHaveLength(0)
+    expect(sync.syncing).toBe(false)
+  })
+
+  it('stops watching on disconnect', async () => {
+    mocks.syncStatus.mockResolvedValue(status())
+    mocks.syncDisconnect.mockResolvedValue(undefined)
+
+    const sync = useSyncStore()
+    await sync.refresh()
+    await sync.watch()
+    await sync.disconnect()
+
+    expect(mocks.syncUnwatch).toHaveBeenCalled()
+    expect(sync.live).toBe(false)
   })
 })

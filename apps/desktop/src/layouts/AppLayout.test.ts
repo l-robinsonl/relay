@@ -87,11 +87,16 @@ const mocks = vi.hoisted(() => ({
   requestResolve: vi.fn(),
   stateGet: vi.fn(),
   stateSet: vi.fn(),
+  syncStatus: vi.fn(),
+  syncConflicts: vi.fn(),
+  syncWatch: vi.fn(),
+  syncUnwatch: vi.fn(),
 }))
 
 vi.mock('@/services/ipc', () => ({
   api: mocks,
   onExecutionProgress: vi.fn().mockResolvedValue(() => {}),
+  onSyncEvent: vi.fn().mockResolvedValue(() => {}),
   isRelayError: () => false,
   toRelayError: (e: unknown) => ({ kind: 'internal', message: String(e) }),
 }))
@@ -115,6 +120,22 @@ beforeEach(() => {
   mocks.requestResolve.mockResolvedValue({ spec: {}, missingVariables: [] })
   mocks.stateGet.mockResolvedValue(null)
   mocks.stateSet.mockResolvedValue(undefined)
+  // A local-only workspace: the ordinary case, and what the shell must
+  // render without a server configured.
+  mocks.syncStatus.mockResolvedValue({
+    connected: false,
+    serverUrl: null,
+    userEmail: null,
+    signedIn: false,
+    lastPulledSeq: 0,
+    lastSyncAt: null,
+    lastError: null,
+    pendingChanges: 0,
+    openConflicts: 0,
+  })
+  mocks.syncConflicts.mockResolvedValue([])
+  mocks.syncWatch.mockResolvedValue(false)
+  mocks.syncUnwatch.mockResolvedValue(undefined)
 
   if (!globalThis.crypto?.randomUUID) {
     Object.defineProperty(globalThis, 'crypto', {
@@ -204,6 +225,12 @@ describe('the application shell', () => {
 
     expect(wrapper.text()).not.toContain('Collections')
     wrapper.unmount()
+  })
+
+  it('shows a local-only workspace as local, not as an error', async () => {
+    const wrapper = await mountApp()
+    // Running without a server is the normal case, not a failure state.
+    expect(wrapper.text()).toContain('Local only')
   })
 
   it('renders the split panes with a keyboard-resizable divider', async () => {

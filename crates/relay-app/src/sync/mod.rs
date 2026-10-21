@@ -7,6 +7,8 @@
 
 mod client;
 mod engine;
+mod watcher;
 
 pub use client::{ServerHealth, SyncClient};
 pub use engine::{Resolution, SyncEngine, SyncOutcome, initial_state};
+pub use watcher::{WatchEvent, Watcher};

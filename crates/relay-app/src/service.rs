@@ -21,7 +21,9 @@ use relay_storage::{
 };
 
 use crate::secrets::SecretStore;
-use crate::sync::{Resolution, SyncClient, SyncEngine, SyncOutcome, initial_state};
+use crate::sync::{
+    Resolution, SyncClient, SyncEngine, SyncOutcome, WatchEvent, Watcher, initial_state,
+};
 
 /// How many history entries are kept per workspace.
 const HISTORY_LIMIT: u32 = 1000;
@@ -779,6 +781,47 @@ impl RelayService {
             pending_changes: pending,
             open_conflicts: conflicts,
         })
+    }
+
+    /// Opens a live connection for a workspace's change notifications.
+    ///
+    /// Returns `None` when the workspace is local-only or signed out —
+    /// not an error, because that is the ordinary case and the caller has
+    /// nothing to do about it.
+    ///
+    /// The watcher is an optimisation over polling: every notification is
+    /// a revision number and the only response is to sync. If it never
+    /// connects, synchronisation still works, just not automatically.
+    pub async fn sync_watch(
+        &self,
+        workspace: WorkspaceId,
+        events: tokio::sync::mpsc::Sender<(WorkspaceId, WatchEvent)>,
+    ) -> RelayResult<Option<Watcher>> {
+        let id = workspace.clone();
+        let Some(state) = self
+            .db
+            .call(move |c| relay_storage::SyncRepo::state(c, &id))
+            .await?
+        else {
+            return Ok(None);
+        };
+
+        let engine = self.sync_engine();
+        let Some(token) = engine.token(&workspace) else {
+            return Ok(None);
+        };
+
+        let client = SyncClient::new(&state.server_url)?;
+        let remote_id = state
+            .remote_workspace_id
+            .unwrap_or_else(|| workspace.to_string());
+
+        Ok(Some(Watcher::start(
+            client.websocket_url(&remote_id),
+            token,
+            workspace,
+            events,
+        )))
     }
 
     /// Conflicts awaiting a decision.

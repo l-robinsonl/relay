@@ -189,6 +189,8 @@ export const api = {
   syncConflicts: (workspaceId: string) => call<ConflictView[]>('sync_conflicts', { workspaceId }),
   syncResolve: (conflictId: string, keepLocal: boolean) =>
     call<void>('sync_resolve', { conflictId, keepLocal }),
+  syncWatch: (workspaceId: string) => call<boolean>('sync_watch', { workspaceId }),
+  syncUnwatch: (workspaceId: string) => call<void>('sync_unwatch', { workspaceId }),
 
   // --- application state --------------------------------------------------
   stateGet: (key: string) => call<string | null>('state_get', { key }),
@@ -201,4 +203,16 @@ export function onExecutionProgress (
   handler: (progress: ExecutionProgress) => void,
 ): Promise<UnlistenFn> {
   return listen<ExecutionProgress>('relay://exec-progress', (event) => handler(event.payload))
+}
+
+/** What the server-change listener reports. */
+export interface SyncEvent {
+  workspaceId: string
+  event: 'connected' | 'changed' | 'disconnected'
+  seq?: number
+}
+
+/** Subscribes to live change notifications from a sync server. */
+export function onSyncEvent (handler: (event: SyncEvent) => void): Promise<UnlistenFn> {
+  return listen<SyncEvent>('relay://sync-changed', (event) => handler(event.payload))
 }

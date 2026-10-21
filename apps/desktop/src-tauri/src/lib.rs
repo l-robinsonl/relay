@@ -55,6 +55,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .manage(service)
+        .manage(commands::SyncWatchers::default())
         .invoke_handler(tauri::generate_handler![
             commands::workspace_list,
             commands::workspace_active,
@@ -97,6 +98,8 @@ pub fn run() {
             commands::sync_now,
             commands::sync_status,
             commands::sync_disconnect,
+            commands::sync_watch,
+            commands::sync_unwatch,
             commands::sync_conflicts,
             commands::sync_resolve,
             commands::state_get,

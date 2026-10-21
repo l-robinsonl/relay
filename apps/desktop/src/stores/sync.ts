@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
-import type { ConflictView, SyncOutcome, SyncStatus } from '@/services/ipc'
-import { api } from '@/services/ipc'
+import type { ConflictView, SyncEvent, SyncOutcome, SyncStatus } from '@/services/ipc'
+import { api, onSyncEvent } from '@/services/ipc'
 import { useToastStore } from '@/stores/toast'
 import { useWorkspaceStore } from '@/stores/workspace'
 
@@ -29,6 +29,10 @@ export const useSyncStore = defineStore('sync', () => {
   const conflicts = ref<ConflictView[]>([])
   const syncing = ref(false)
   const lastOutcome = ref<SyncOutcome | null>(null)
+  const live = ref(false)
+
+  /** Collapses a burst of notifications into one sync. */
+  let pendingSync: ReturnType<typeof setTimeout> | undefined
 
   /**
    * What the indicator should show.
@@ -130,6 +134,7 @@ export const useSyncStore = defineStore('sync', () => {
       )
       toasts.success('Connected', `Signed in to ${serverUrl} as ${email}.`)
       await syncNow()
+      await watch()
       return true
     } catch (error) {
       toasts.error('Could not connect', error)
@@ -140,6 +145,7 @@ export const useSyncStore = defineStore('sync', () => {
   async function disconnect () {
     if (!workspace.current) return
     try {
+      await unwatch()
       await api.syncDisconnect(workspace.current.id)
       toasts.info('Disconnected', 'Your workspace is still here, on this machine.')
     } catch (error) {
@@ -147,6 +153,86 @@ export const useSyncStore = defineStore('sync', () => {
     } finally {
       await refresh()
     }
+  }
+
+  /**
+   * Syncs because the server said something changed.
+   *
+   * Quiet: an automatic sync that announced itself every time somebody
+   * else saved a request would be unusable in a team.
+   */
+  async function syncQuietly () {
+    if (!workspace.current || syncing.value || !status.value.connected) return
+    syncing.value = true
+
+    try {
+      const outcome = await api.syncNow(workspace.current.id)
+      lastOutcome.value = outcome
+
+      if (outcome.pulled > 0) {
+        await workspace.refreshTree()
+        await workspace.refreshEnvironments()
+      }
+      // A conflict does need saying, because it needs a decision.
+      if (outcome.conflicts > 0) {
+        toasts.warn(
+          `${outcome.conflicts} conflict${outcome.conflicts === 1 ? '' : 's'} need resolving`,
+          'Someone else changed the same thing. Nothing was overwritten.',
+        )
+      }
+    } catch {
+      // A background sync that fails says nothing: the indicator already
+      // shows the state, and an unprompted error toast is just noise.
+    } finally {
+      syncing.value = false
+      await refresh()
+    }
+  }
+
+  function handleEvent (event: SyncEvent) {
+    if (event.workspaceId !== workspace.current?.id) return
+
+    if (event.event === 'connected') {
+      live.value = true
+      return
+    }
+    if (event.event === 'disconnected') {
+      live.value = false
+      return
+    }
+
+    // Several people saving at once produces a burst; one sync covers all
+    // of it, and the protocol only needs the latest revision anyway.
+    clearTimeout(pendingSync)
+    pendingSync = setTimeout(() => void syncQuietly(), 400)
+  }
+
+  /** Starts listening for server changes to the active workspace. */
+  async function watch () {
+    if (!workspace.current) return
+    try {
+      live.value = await api.syncWatch(workspace.current.id)
+    } catch {
+      // Live updates are an optimisation; manual sync still works.
+      live.value = false
+    }
+  }
+
+  /** Stops listening. */
+  async function unwatch () {
+    if (!workspace.current) return
+    clearTimeout(pendingSync)
+    live.value = false
+    try {
+      await api.syncUnwatch(workspace.current.id)
+    } catch {
+      // Nothing useful to do if it was already gone.
+    }
+  }
+
+  /** Subscribes to the event channel for the lifetime of the app. */
+  function listenForChanges () {
+    return onSyncEvent(handleEvent)
   }
 
   async function resolve (conflictId: string, keepLocal: boolean) {
@@ -165,12 +251,17 @@ export const useSyncStore = defineStore('sync', () => {
     conflicts,
     syncing,
     lastOutcome,
+    live,
     phase,
     label,
     refresh,
     syncNow,
+    syncQuietly,
     connect,
     disconnect,
     resolve,
+    watch,
+    unwatch,
+    listenForChanges,
   }
 })
