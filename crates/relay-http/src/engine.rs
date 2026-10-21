@@ -118,6 +118,11 @@ impl HttpEngine {
         self.pool.clear();
     }
 
+    /// Discards every stored cookie.
+    pub fn clear_cookies(&self) {
+        self.pool.clear_cookies();
+    }
+
     /// Executes a fully resolved request.
     ///
     /// Always returns an [`HttpExchange`] rather than an `Err`: a 500 response

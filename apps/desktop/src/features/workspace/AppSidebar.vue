@@ -3,34 +3,44 @@ import { computed, ref } from 'vue'
 import {
   ChevronDown,
   Clock,
+  Copy,
+  FilePlus,
   FolderPlus,
   Layers,
+  Pencil,
   Plus,
   Search,
   Settings2,
+  Terminal,
+  Trash2,
   X,
 } from '@lucide/vue'
 import type { TreeNode } from '@relay/shared-types'
 import { api } from '@/services/ipc'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import MethodBadge from '@/components/ui/MethodBadge.vue'
+import ContextMenu, { type MenuItem } from '@/components/ui/ContextMenu.vue'
+import WorkspaceSettings from '@/features/workspace/WorkspaceSettings.vue'
 import SidebarTree from '@/features/workspace/SidebarTree.vue'
 import { useDragDrop } from '@/composables/useDragDrop'
 import EnvironmentList from '@/features/environment/EnvironmentList.vue'
 import HistoryList from '@/features/history/HistoryList.vue'
 import type { SidebarView } from '@/types/ui'
 import { useDialogStore } from '@/stores/dialogs'
+import { useToastStore } from '@/stores/toast'
 import { useTabsStore } from '@/stores/tabs'
 import { useWorkspaceStore } from '@/stores/workspace'
 
 const workspace = useWorkspaceStore()
 const tabs = useTabsStore()
 const dialogs = useDialogStore()
+const toasts = useToastStore()
 
 const drag = useDragDrop()
 const view = ref<SidebarView>('collections')
 const search = ref('')
 const workspaceMenuOpen = ref(false)
+const workspaceSettingsOpen = ref(false)
 
 const selectedRequestId = computed(() => tabs.activeTab?.requestId ?? null)
 
@@ -64,13 +74,41 @@ async function newRequest () {
   tabs.openDraft()
 }
 
-async function newFolder () {
+async function newFolder (parentId: string | null = null) {
   const name = await dialogs.prompt({
-    title: 'New folder',
+    title: parentId ? 'New folder inside' : 'New folder',
     label: 'Name',
     placeholder: 'Users',
   })
-  if (name) await workspace.createFolder(name)
+  if (name) await workspace.createFolder(name, parentId)
+}
+
+async function renameWorkspace () {
+  workspaceMenuOpen.value = false
+  if (!workspace.current) return
+
+  const name = await dialogs.prompt({
+    title: 'Rename workspace',
+    label: 'Name',
+    value: workspace.current.name,
+    confirmLabel: 'Rename',
+  })
+  if (name) await workspace.renameWorkspace(name)
+}
+
+async function deleteWorkspace () {
+  workspaceMenuOpen.value = false
+  const current = workspace.current
+  if (!current) return
+
+  const confirmed = await dialogs.confirm({
+    title: `Delete "${current.name}"?`,
+    description:
+      'Every collection, request, environment and history entry in it goes too. Export it first if you might want it back.',
+    confirmLabel: 'Delete workspace',
+    destructive: true,
+  })
+  if (confirmed) await workspace.deleteWorkspace(current.id)
 }
 
 async function switchWorkspace (id: string) {
@@ -89,7 +127,94 @@ async function newWorkspace () {
   if (name) await workspace.createWorkspace(name)
 }
 
-async function handleContextMenu (node: TreeNode) {
+const menuPosition = ref<{ x: number; y: number } | null>(null)
+const menuNode = ref<TreeNode | null>(null)
+
+/** The actions available for whatever was right-clicked. */
+const menuItems = computed<MenuItem[]>(() => {
+  const node = menuNode.value
+  if (!node) return []
+
+  if (node.kind === 'folder') {
+    return [
+      {
+        id: 'new-request',
+        label: 'New request here',
+        icon: FilePlus,
+        run: () => void tabs.openDraft(node.id),
+      },
+      {
+        id: 'new-folder',
+        label: 'New folder here',
+        icon: FolderPlus,
+        run: () => newFolder(node.id),
+      },
+      { id: 'rename', label: 'Rename…', icon: Pencil, run: () => renameNode(node) },
+      {
+        id: 'delete',
+        label: 'Delete folder',
+        icon: Trash2,
+        destructive: true,
+        run: () => deleteNode(node),
+      },
+    ]
+  }
+
+  return [
+    { id: 'open', label: 'Open', icon: FilePlus, run: () => void tabs.openRequest(node.id) },
+    { id: 'rename', label: 'Rename…', icon: Pencil, run: () => renameNode(node) },
+    { id: 'duplicate', label: 'Duplicate', icon: Copy, run: () => duplicate(node) },
+    { id: 'curl', label: 'Copy as cURL', icon: Terminal, run: () => copyAsCurl(node) },
+    {
+      id: 'delete',
+      label: 'Delete request',
+      icon: Trash2,
+      destructive: true,
+      run: () => deleteNode(node),
+    },
+  ]
+})
+
+function handleContextMenu (node: TreeNode, event: MouseEvent) {
+  menuNode.value = node
+  menuPosition.value = { x: event.clientX, y: event.clientY }
+}
+
+function closeMenu () {
+  menuPosition.value = null
+  menuNode.value = null
+}
+
+async function renameNode (node: TreeNode) {
+  const name = await dialogs.prompt({
+    title: node.kind === 'folder' ? 'Rename folder' : 'Rename request',
+    label: 'Name',
+    value: node.name,
+    confirmLabel: 'Rename',
+  })
+  if (!name || name === node.name) return
+
+  if (node.kind === 'folder') await workspace.renameFolder(node.id, name)
+  else await workspace.renameRequest(node.id, name)
+}
+
+async function duplicate (node: TreeNode) {
+  const copy = await workspace.duplicateRequest(node.id)
+  if (copy) await tabs.openRequest(copy.id)
+}
+
+async function copyAsCurl (node: TreeNode) {
+  try {
+    const doc = await api.requestGet(node.id)
+    const command = await api.exportCurl(doc, workspace.activeEnvironmentId)
+    await navigator.clipboard.writeText(command)
+    toasts.success('Copied as cURL')
+  } catch (error) {
+    toasts.error('Could not build the cURL command', error)
+  }
+}
+
+async function deleteNode (node: TreeNode) {
   if (node.kind === 'folder') {
     const confirmed = await dialogs.confirm({
       title: `Delete "${node.name}"?`,
@@ -108,9 +233,8 @@ async function handleContextMenu (node: TreeNode) {
     destructive: true,
   })
   if (confirmed) {
-    await api.requestDelete(node.id)
     tabs.closeByRequestId(node.id)
-    await workspace.refreshTree()
+    await workspace.deleteRequest(node.id)
   }
 }
 </script>
@@ -151,6 +275,27 @@ async function handleContextMenu (node: TreeNode) {
         <button type="button" class="row rounded-none" @click="newWorkspace">
           <Plus :size="13" />
           <span class="text-sm">New workspace</span>
+        </button>
+        <button
+          type="button"
+          class="row rounded-none"
+          @click="workspaceMenuOpen = false; workspaceSettingsOpen = true"
+        >
+          <Settings2 :size="13" />
+          <span class="text-sm">Workspace settings</span>
+        </button>
+        <button type="button" class="row rounded-none" @click="renameWorkspace">
+          <Pencil :size="13" />
+          <span class="text-sm">Rename this workspace</span>
+        </button>
+        <button
+          type="button"
+          class="row rounded-none"
+          :style="{ color: 'var(--danger)' }"
+          @click="deleteWorkspace"
+        >
+          <Trash2 :size="13" />
+          <span class="text-sm">Delete this workspace</span>
         </button>
       </div>
     </div>
@@ -211,7 +356,7 @@ async function handleContextMenu (node: TreeNode) {
             <Plus :size="13" />
             Request
           </button>
-          <button type="button" class="btn btn-ghost flex-1 py-1 text-xs" @click="newFolder">
+          <button type="button" class="btn btn-ghost flex-1 py-1 text-xs" @click="newFolder()">
             <FolderPlus :size="13" />
             Folder
           </button>
@@ -280,6 +425,12 @@ async function handleContextMenu (node: TreeNode) {
 
     <EnvironmentList v-else-if="view === 'environments'" class="min-h-0 flex-1" />
     <HistoryList v-else class="min-h-0 flex-1" />
+
+    <ContextMenu :position="menuPosition" :items="menuItems" @close="closeMenu" />
+    <WorkspaceSettings
+      :open="workspaceSettingsOpen"
+      @close="workspaceSettingsOpen = false"
+    />
 
     <!-- Active environment -->
     <div class="shrink-0 border-t border-subtle px-2 py-2">

@@ -378,6 +378,16 @@ impl RelayService {
         Ok(exchange)
     }
 
+    /// Discards every stored cookie.
+    ///
+    /// Cookies are shared across requests so that a login followed by a
+    /// call works. The cost is that a stale session cookie then breaks
+    /// every later request in a way that is hard to spot, so there has to
+    /// be a way to throw them away.
+    pub fn clear_cookies(&self) {
+        self.engine.clear_cookies();
+    }
+
     /// Cancels an in-flight request.
     pub fn request_cancel(&self, execution_id: &relay_models::ExecutionId) -> bool {
         self.engine.cancel(execution_id)

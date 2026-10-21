@@ -616,3 +616,42 @@ async fn non_idempotent_requests_are_never_retried_automatically() {
     // path at all, which this test documents and pins.
     assert_eq!(settings.max_redirects, 10);
 }
+
+#[tokio::test]
+async fn clearing_cookies_stops_them_being_sent() {
+    let server = support::start().await;
+    let engine = engine();
+
+    // Acquire a cookie, and confirm it is replayed.
+    send(
+        &engine,
+        HttpRequestSpec::new(HttpMethod::Get, server.url("/set-cookie")),
+    )
+    .await;
+
+    let before = expect_success(
+        send(
+            &engine,
+            HttpRequestSpec::new(HttpMethod::Get, server.url("/read-cookie")),
+        )
+        .await,
+    );
+    assert!(body_text(&before).contains("sid=abc123"));
+
+    engine.clear_cookies();
+
+    // A stale session cookie breaking every later request is a real and
+    // confusing failure, so clearing has to actually work.
+    let after = expect_success(
+        send(
+            &engine,
+            HttpRequestSpec::new(HttpMethod::Get, server.url("/read-cookie")),
+        )
+        .await,
+    );
+    assert_eq!(
+        body_text(&after),
+        "<none>",
+        "a cleared cookie was still sent"
+    );
+}

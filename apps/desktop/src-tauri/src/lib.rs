@@ -76,6 +76,7 @@ pub fn run() {
             commands::request_resolve,
             commands::http_send,
             commands::http_cancel,
+            commands::cookies_clear,
             commands::environment_list,
             commands::environment_create,
             commands::environment_save,

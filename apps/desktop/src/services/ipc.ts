@@ -136,6 +136,7 @@ export const api = {
   httpSend: (executionId: string, doc: RequestDoc, environmentId?: string | null) =>
     call<HttpExchange>('http_send', { executionId, doc, environmentId: environmentId ?? null }),
   httpCancel: (executionId: string) => call<boolean>('http_cancel', { executionId }),
+  cookiesClear: () => call<void>('cookies_clear'),
 
   // --- environments and secrets --------------------------------------------
   environmentList: (workspaceId: string) =>

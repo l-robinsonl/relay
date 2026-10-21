@@ -142,8 +142,88 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   async function renameFolder (id: string, name: string) {
     const collection = collections.value.find((c) => c.id === id)
     if (!collection) return
-    await api.collectionSave({ ...collection, name })
-    await refreshTree()
+    try {
+      await api.collectionSave({ ...collection, name })
+      await refreshTree()
+    } catch (error) {
+      toasts.error('Could not rename that folder', error)
+    }
+  }
+
+  /** Renames a saved request without needing it open in a tab. */
+  async function renameRequest (id: string, name: string) {
+    try {
+      const doc = await api.requestGet(id)
+      await api.requestSave({ ...doc, name })
+      await refreshTree()
+    } catch (error) {
+      toasts.error('Could not rename that request', error)
+    }
+  }
+
+  /** Copies a request, placing the copy beside the original. */
+  async function duplicateRequest (id: string) {
+    try {
+      const copy = await api.requestDuplicate(id)
+      await refreshTree()
+      return copy
+    } catch (error) {
+      toasts.error('Could not duplicate that request', error)
+      return null
+    }
+  }
+
+  /** Deletes a request. */
+  async function deleteRequest (id: string) {
+    try {
+      await api.requestDelete(id)
+      await refreshTree()
+    } catch (error) {
+      toasts.error('Could not delete that request', error)
+    }
+  }
+
+  /** Saves workspace-level variables. */
+  async function saveVariables (variables: Workspace['variables']) {
+    if (!current.value) return
+    try {
+      const saved = await api.workspaceSave({ ...current.value, variables })
+      current.value = saved
+      await loadWorkspaces()
+    } catch (error) {
+      toasts.error('Could not save those variables', error)
+    }
+  }
+
+  /** Renames the active workspace. */
+  async function renameWorkspace (name: string) {
+    if (!current.value) return
+    try {
+      const saved = await api.workspaceSave({ ...current.value, name })
+      current.value = saved
+      await loadWorkspaces()
+    } catch (error) {
+      toasts.error('Could not rename the workspace', error)
+    }
+  }
+
+  /** Deletes a workspace and everything in it. */
+  async function deleteWorkspace (id: string) {
+    try {
+      await api.workspaceDelete(id)
+      await loadWorkspaces()
+      const next = workspaces.value[0]
+      if (next) await select(next.id)
+      else {
+        // The backend creates one on demand rather than leaving the app
+        // with nothing to show.
+        const created = await api.workspaceActive()
+        await loadWorkspaces()
+        await select(created.id)
+      }
+    } catch (error) {
+      toasts.error('Could not delete that workspace', error)
+    }
   }
 
   async function createEnvironment (name: string) {
@@ -235,6 +315,12 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     createFolder,
     deleteFolder,
     renameFolder,
+    renameRequest,
+    duplicateRequest,
+    deleteRequest,
+    saveVariables,
+    renameWorkspace,
+    deleteWorkspace,
     createEnvironment,
     saveEnvironment,
     deleteEnvironment,

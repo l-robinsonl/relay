@@ -250,6 +250,12 @@ pub async fn http_send(
         .await
 }
 
+/// Discards every stored cookie.
+#[tauri::command]
+pub fn cookies_clear(service: State<'_, RelayService>) {
+    service.clear_cookies();
+}
+
 /// Cancels an in-flight request. Returns true if one was running.
 #[tauri::command]
 pub fn http_cancel(service: State<'_, RelayService>, execution_id: ExecutionId) -> bool {

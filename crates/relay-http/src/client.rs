@@ -52,7 +52,10 @@ pub struct ClientPool {
     clients: Arc<Mutex<HashMap<ClientKey, reqwest::Client>>>,
     /// Shared across every client so that a cookie set by one request is
     /// visible to the next, which is what makes login-then-call flows work.
-    cookie_jar: Arc<reqwest::cookie::Jar>,
+    ///
+    /// Behind a mutex because clearing cookies means replacing the jar:
+    /// `reqwest`'s `Jar` can be added to but not emptied.
+    cookie_jar: Arc<Mutex<Arc<reqwest::cookie::Jar>>>,
     default_timeout: Duration,
     user_agent: String,
 }
@@ -62,15 +65,31 @@ impl ClientPool {
     pub fn new(default_timeout: Duration, user_agent: impl Into<String>) -> Self {
         Self {
             clients: Arc::new(Mutex::new(HashMap::new())),
-            cookie_jar: Arc::new(reqwest::cookie::Jar::default()),
+            cookie_jar: Arc::new(Mutex::new(Arc::new(reqwest::cookie::Jar::default()))),
             default_timeout,
             user_agent: user_agent.into(),
         }
     }
 
-    /// The shared cookie jar, so callers can inspect or clear it.
+    /// The shared cookie jar.
     pub fn cookie_jar(&self) -> Arc<reqwest::cookie::Jar> {
-        Arc::clone(&self.cookie_jar)
+        match self.cookie_jar.lock() {
+            Ok(guard) => Arc::clone(&guard),
+            Err(poisoned) => Arc::clone(&poisoned.into_inner()),
+        }
+    }
+
+    /// Discards every stored cookie.
+    ///
+    /// `reqwest::cookie::Jar` has no way to remove anything, so this
+    /// swaps in a fresh one and drops the pooled clients that were built
+    /// around the old jar. Without dropping them, existing connections
+    /// would keep sending the cookies the user just asked to forget.
+    pub fn clear_cookies(&self) {
+        if let Ok(mut guard) = self.cookie_jar.lock() {
+            *guard = Arc::new(reqwest::cookie::Jar::default());
+        }
+        self.clear();
     }
 
     /// Discards every pooled client, dropping their connections.
@@ -104,7 +123,7 @@ impl ClientPool {
     fn build(&self, settings: &RequestSettings) -> Result<reqwest::Client, EngineError> {
         let mut builder = reqwest::Client::builder()
             .user_agent(self.user_agent.clone())
-            .cookie_provider(Arc::clone(&self.cookie_jar))
+            .cookie_provider(self.cookie_jar())
             // Connection timeouts are separate from the overall deadline so a
             // dead host fails quickly rather than burning the whole budget.
             .connect_timeout(Duration::from_secs(30))
@@ -219,6 +238,25 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(ClientKey::from_settings(&a), ClientKey::from_settings(&b));
+    }
+
+    #[test]
+    fn clearing_cookies_also_drops_the_clients_holding_the_old_jar() {
+        // A pooled client keeps a reference to the jar it was built with,
+        // so leaving it in place would keep sending cookies the user just
+        // cleared.
+        let pool = ClientPool::new(Duration::from_secs(30), "relay-test");
+        pool.get(&RequestSettings::default()).unwrap();
+        assert_eq!(pool.clients.lock().unwrap().len(), 1);
+
+        let before = pool.cookie_jar();
+        pool.clear_cookies();
+
+        assert_eq!(pool.clients.lock().unwrap().len(), 0);
+        assert!(
+            !Arc::ptr_eq(&before, &pool.cookie_jar()),
+            "the jar was reused rather than replaced"
+        );
     }
 
     #[test]
