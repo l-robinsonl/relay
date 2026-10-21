@@ -17,10 +17,12 @@ desktop application changes either way.
 
 ## Why
 
-Most API clients want an account before they will let you send a GET request,
-sync your collections to someone else's infrastructure by default, and treat
-the secrets in your environment variables as ordinary data. Relay is built the
-other way round:
+Postman will not let you send a GET request until you have signed in. Your
+collections sync to their infrastructure unless you stop them. The offline
+mode that used to exist has been whittled away. None of that is necessary
+to send an HTTP request and look at the response.
+
+Relay is built the other way round:
 
 - **No account, ever, for local use.** There is no sign-in screen.
 - **Local-first.** The local database is authoritative. Nothing waits on a
@@ -32,11 +34,12 @@ other way round:
 - **Secrets stay put.** Values marked secret are never written to the database,
   never exported, and never synchronised — by construction, not by filter.
 - **No telemetry.** None. There is no analytics code to disable.
-- **Small, because it ships no browser.** Relay uses the webview your
-  operating system already has rather than bundling its own Chromium.
-  Measured on one machine, both idle: **221 MB against Postman's
-  1,067 MB**, and a **7.3 MB** download against Postman's 199 MB.
-  [The numbers, the method, and the caveats](docs/FOOTPRINT.md).
+
+Being small is a consequence of those choices rather than the point of
+them — Relay uses the webview your system already has instead of shipping
+a Chromium, which on one machine measured 221 MB resident against
+Postman's 1,067 MB, and 7.3 MB to download against 199 MB. Pleasant, but
+not the reason to switch. [The numbers and their caveats](docs/FOOTPRINT.md).
 
 ## Install
 
