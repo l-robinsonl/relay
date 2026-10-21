@@ -68,7 +68,9 @@ async function chooseFile () {
   const { open } = await import('@tauri-apps/plugin-dialog')
   const selected = await open({
     multiple: false,
-    filters: [{ name: 'Collections and exports', extensions: ['json'] }],
+    filters: [
+      { name: 'Specifications and exports', extensions: ['json', 'yaml', 'yml'] },
+    ],
   })
   if (typeof selected !== 'string') return
 
@@ -182,7 +184,8 @@ async function apply () {
                 Choose a file, or drop one here
               </span>
               <span class="text-xs text-muted">
-                Postman collection v2.1, a Postman environment, or a Relay workspace export
+                OpenAPI 3 (JSON or YAML), a Postman collection or environment, or a Relay
+                workspace export
               </span>
             </button>
 

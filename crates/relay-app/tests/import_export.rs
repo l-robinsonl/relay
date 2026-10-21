@@ -365,3 +365,147 @@ async fn importing_the_same_collection_twice_does_not_merge_the_two() {
     let requests = service.request_list(workspace.id).await.unwrap();
     assert_eq!(requests.len(), 4);
 }
+
+const OPENAPI: &str = r#"
+openapi: 3.0.3
+info: { title: Weather, version: '1.0' }
+servers:
+  - url: https://api.weather.example
+paths:
+  /forecast:
+    get:
+      tags: [forecast]
+      summary: Get the forecast
+      parameters:
+        - name: city
+          in: query
+          required: true
+          schema: { type: string }
+      responses: { '200': { description: OK } }
+"#;
+
+#[tokio::test]
+async fn an_openapi_document_is_detected_and_imported() {
+    let service = service();
+    let workspace = service.active_workspace().await.unwrap();
+
+    let report = service
+        .import_detect(OPENAPI, workspace.id.clone())
+        .unwrap();
+    assert!(
+        report.source_format.starts_with("OpenAPI"),
+        "{}",
+        report.source_format
+    );
+
+    service.import_apply(report).await.unwrap();
+
+    let requests = service.request_list(workspace.id.clone()).await.unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].name, "Get the forecast");
+    assert_eq!(requests[0].url, "{{baseUrl}}/forecast");
+
+    // Grouped under its tag, inside the document's own collection.
+    let collections = service.collection_list(workspace.id).await.unwrap();
+    assert_eq!(collections.len(), 2);
+    assert!(collections.iter().any(|c| c.name == "Weather"));
+    assert!(collections.iter().any(|c| c.name == "forecast"));
+}
+
+#[tokio::test]
+async fn an_imported_openapi_request_actually_sends() {
+    // The real test of an importer is whether what comes out works.
+    use axum::{Router, routing::get};
+
+    let app = Router::new().route("/forecast", get(|| async { "sunny" }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+
+    let service = service();
+    let workspace = service.active_workspace().await.unwrap();
+    let report = service
+        .import_detect(OPENAPI, workspace.id.clone())
+        .unwrap();
+    service.import_apply(report).await.unwrap();
+
+    let mut environment = service
+        .environment_create(workspace.id.clone(), "Local".into())
+        .await
+        .unwrap();
+    environment.variables = vec![Variable::new("baseUrl", format!("http://{addr}"))];
+    let environment = service.environment_save(environment).await.unwrap();
+
+    let doc = service.request_list(workspace.id).await.unwrap().remove(0);
+    let exchange = service
+        .request_send(
+            relay_models::ExecutionId::new(),
+            doc,
+            Some(environment.id),
+            Arc::new(relay_http::NoopProgress),
+        )
+        .await
+        .unwrap();
+
+    match exchange {
+        relay_models::HttpExchange::Success { response, .. } => {
+            assert_eq!(response.status, 200);
+        }
+        other => panic!("the imported request did not work: {other:?}"),
+    }
+
+    server.abort();
+}
+
+#[tokio::test]
+async fn detection_tells_the_three_formats_apart() {
+    let service = service();
+    let workspace = service.active_workspace().await.unwrap();
+
+    assert!(
+        service
+            .import_detect(COLLECTION, workspace.id.clone())
+            .unwrap()
+            .source_format
+            .starts_with("Postman")
+    );
+    assert!(
+        service
+            .import_detect(OPENAPI, workspace.id.clone())
+            .unwrap()
+            .source_format
+            .starts_with("OpenAPI")
+    );
+
+    let exported = service
+        .export_workspace(workspace.id.clone())
+        .await
+        .unwrap();
+    assert!(
+        service
+            .import_detect(&exported, workspace.id.clone())
+            .unwrap()
+            .source_format
+            .starts_with("Relay")
+    );
+}
+
+#[tokio::test]
+async fn an_unrecognised_file_names_every_format_it_tried() {
+    let service = service();
+    let workspace = service.active_workspace().await.unwrap();
+
+    let error = service
+        .import_detect(r#"{"something":"else"}"#, workspace.id)
+        .unwrap_err();
+
+    for expected in ["Relay", "OpenAPI", "Postman"] {
+        assert!(
+            error.message.contains(expected),
+            "the error did not mention {expected}: {}",
+            error.message
+        );
+    }
+}

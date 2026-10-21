@@ -83,8 +83,9 @@ rather than hanging.
 the value goes to a credential store and is injected only for the moment a
 request is sent.
 
-**Import and export** — bring in a Postman v2.1 collection or environment,
-paste a `curl` command, or restore a Relay export. Every import is previewed
+**Import and export** — bring in an OpenAPI 3 document (JSON or YAML), a
+Postman v2.1 collection or environment, paste a `curl` command, or restore
+a Relay export. Every import is previewed
 first: you see what will be created *and* what cannot be represented before
 anything is written, and the whole thing lands in one transaction or not at
 all. Copy any request back out as `curl`, or export an entire workspace as
@@ -113,7 +114,6 @@ Stated plainly, because a README that implies otherwise wastes your time:
   Phase 4.
 - **OAuth 2.0 flows.** The configuration round-trips; the flows do not run.
   A Postman OAuth 2.0 block imports as a bearer token.
-- **OpenAPI import.** Phase 4. Postman, cURL and Relay exports all work.
 - **Digest, NTLM, AWS and Hawk auth.** Reported on import, not supported.
 
 ## Roadmap
@@ -123,7 +123,7 @@ Stated plainly, because a README that implies otherwise wastes your time:
 | 1 | Desktop shell, HTTP engine, SQLite persistence, save and reopen | **Done** |
 | 2 | Collections, environments, interpolation, auth, history, import/export | **Done** |
 | 3 | Self-hosted Axum sync server, users, revisions, WebSockets, conflicts | **Done** |
-| 4 | OAuth 2.0 flows, sandboxed scripting, OpenAPI import, certificates | Designed |
+| 4 | OAuth 2.0 flows, sandboxed scripting, certificates | In progress — OpenAPI import done |
 | 5 | Installers, signing, CI, benchmarks, security review | In progress — installers build, signing and CI unrun |
 | 6 | Relay Cloud on Neon Postgres, multitenant, RLS | Designed |
 | 7 | Stripe billing, per-seat annual subscriptions, entitlements | Designed |

@@ -552,18 +552,45 @@ impl RelayService {
         Ok(relay_core::postman::import_any(json, workspace)?)
     }
 
+    /// Parses an OpenAPI 3.x document without saving anything.
+    ///
+    /// Accepts JSON or YAML; the content decides, because the extension
+    /// on a specification is frequently wrong or absent.
+    pub fn import_openapi(
+        &self,
+        source: &str,
+        workspace: WorkspaceId,
+    ) -> RelayResult<ImportReport> {
+        Ok(relay_core::openapi::import_openapi(source, workspace)?)
+    }
+
     /// Parses a Relay workspace export without saving anything.
     pub fn import_relay(&self, json: &str, workspace: WorkspaceId) -> RelayResult<ImportReport> {
         Ok(WorkspaceExport::from_json(json)?.into_report(&workspace))
     }
 
     /// Reads a file of either kind, choosing the importer by its content.
-    pub fn import_detect(&self, json: &str, workspace: WorkspaceId) -> RelayResult<ImportReport> {
-        // A Relay export is self-identifying, so try it first and fall back.
-        match WorkspaceExport::from_json(json) {
-            Ok(export) => Ok(export.into_report(&workspace)),
-            Err(_) => Ok(relay_core::postman::import_any(json, workspace)?),
+    pub fn import_detect(&self, source: &str, workspace: WorkspaceId) -> RelayResult<ImportReport> {
+        // Each format announces itself — a Relay export has `format`,
+        // OpenAPI has `openapi`, Postman has `item` or `values` — so the
+        // checks are cheap and unambiguous, and only a file matching none
+        // of them produces an error.
+        if let Ok(export) = WorkspaceExport::from_json(source) {
+            return Ok(export.into_report(&workspace));
         }
+
+        if looks_like_openapi(source) {
+            return self.import_openapi(source, workspace);
+        }
+
+        relay_core::postman::import_any(source, workspace).map_err(|postman_error| {
+            RelayError::new(
+                ErrorKind::Import,
+                "this file is not a Relay export, an OpenAPI 3 document, or a Postman \
+                 collection or environment",
+            )
+            .with_detail(postman_error.to_string())
+        })
     }
 
     /// Writes an accepted import to the database.
@@ -945,6 +972,18 @@ pub struct ConflictView {
     pub server_deleted: bool,
     /// When the disagreement was noticed.
     pub detected_at: Timestamp,
+}
+
+/// True when a document announces itself as OpenAPI.
+///
+/// A cheap textual check rather than a full parse: `import_detect` is
+/// called on every import, and parsing a large YAML document twice to
+/// find out it was not OpenAPI would be wasteful.
+fn looks_like_openapi(source: &str) -> bool {
+    source.lines().take(40).any(|line| {
+        let line = line.trim_start();
+        line.starts_with("\"openapi\"") || line.starts_with("openapi:")
+    })
 }
 
 /// Pulls a display name out of a stored document, if it has one.

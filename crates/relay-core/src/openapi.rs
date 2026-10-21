@@ -96,7 +96,9 @@ pub fn import_openapi(source: &str, workspace_id: WorkspaceId) -> CoreResult<Imp
     let mut order = 0.0;
 
     for (path, item) in paths {
-        let Some(item) = item.as_object() else { continue };
+        let Some(item) = item.as_object() else {
+            continue;
+        };
 
         // Parameters declared on the path apply to every operation in it.
         let shared = item.get("parameters").and_then(Value::as_array);
@@ -158,11 +160,8 @@ fn parse(source: &str) -> CoreResult<Value> {
         return Ok(value);
     }
 
-    serde_norway::from_str::<Value>(source).map_err(|e| {
-        CoreError::Import(format!(
-            "this is neither valid JSON nor valid YAML: {e}"
-        ))
-    })
+    serde_norway::from_str::<Value>(source)
+        .map_err(|e| CoreError::Import(format!("this is neither valid JSON nor valid YAML: {e}")))
 }
 
 /// Picks the first server and expands its template variables.
@@ -415,7 +414,10 @@ fn build_request(
 
     // An operation may override the document's security.
     if let Some(security) = operation.get("security").and_then(Value::as_array) {
-        doc.auth = match security.first().and_then(Value::as_object).and_then(|o| o.keys().next())
+        doc.auth = match security
+            .first()
+            .and_then(Value::as_object)
+            .and_then(|o| o.keys().next())
         {
             // An empty requirement means this operation is public.
             None => AuthConfig::None,
@@ -431,7 +433,9 @@ fn build_request(
     }
 
     if operation.get("deprecated").and_then(Value::as_bool) == Some(true) {
-        doc.description = format!("DEPRECATED. {}", doc.description).trim_end().to_string();
+        doc.description = format!("DEPRECATED. {}", doc.description)
+            .trim_end()
+            .to_string();
         doc.tags.push("deprecated".into());
     }
 
@@ -580,7 +584,11 @@ fn example_from_schema(root: &Value, schema: &Value, depth: usize) -> Value {
     if let Some(default) = schema.get("default") {
         return default.clone();
     }
-    if let Some(first) = schema.get("enum").and_then(Value::as_array).and_then(|e| e.first()) {
+    if let Some(first) = schema
+        .get("enum")
+        .and_then(Value::as_array)
+        .and_then(|e| e.first())
+    {
         return first.clone();
     }
 
@@ -609,10 +617,7 @@ fn example_from_schema(root: &Value, schema: &Value, depth: usize) -> Value {
             let mut object = serde_json::Map::new();
             if let Some(properties) = schema.get("properties").and_then(Value::as_object) {
                 for (name, property) in properties {
-                    object.insert(
-                        name.clone(),
-                        example_from_schema(root, property, depth + 1),
-                    );
+                    object.insert(name.clone(), example_from_schema(root, property, depth + 1));
                 }
             }
             Value::Object(object)
@@ -690,9 +695,8 @@ fn warn_about_unsupported(root: &Value, title: &str, report: &mut ImportReport) 
         .and_then(Value::as_object)
         .is_some_and(|paths| {
             paths.values().any(|item| {
-                item.as_object().is_some_and(|ops| {
-                    ops.values().any(|op| op.get("callbacks").is_some())
-                })
+                item.as_object()
+                    .is_some_and(|ops| ops.values().any(|op| op.get("callbacks").is_some()))
             })
         });
     if has_callbacks {
