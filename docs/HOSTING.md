@@ -98,6 +98,72 @@ and you are relying on the application's own filtering alone.
   `workspace_id`, not by Neon project. A project per customer would multiply
   cost and operational surface for isolation the schema already provides.
 
+## The API
+
+All of it is under `/v1`, with `/health` outside for load balancers.
+
+| Method | Path | Who |
+|---|---|---|
+| `GET` | `/health` | anyone |
+| `POST` | `/v1/auth/register` | anyone, subject to `RELAY_SIGNUP_MODE` |
+| `POST` | `/v1/auth/login` | anyone |
+| `GET` | `/v1/auth/me` | any signed-in user |
+| `POST` | `/v1/auth/logout` | any signed-in user |
+| `GET`/`POST` | `/v1/workspaces` | any signed-in user |
+| `GET` | `/v1/workspaces/{id}/head` | viewer |
+| `GET` | `/v1/workspaces/{id}/changes?since=N&limit=M` | viewer |
+| `POST` | `/v1/workspaces/{id}/changes` | editor |
+| `GET` | `/v1/workspaces/{id}/export` | viewer |
+| `GET` | `/v1/workspaces/{id}/members` | viewer |
+| `PUT`/`DELETE` | `/v1/workspaces/{id}/members/{userId}` | admin |
+| `GET` | `/v1/workspaces/{id}/ws` | viewer |
+
+Authentication is a bearer token from `/v1/auth/login`.
+
+**A workspace you cannot reach returns `404`, not `403`**, whether it does
+not exist or merely is not yours. A `403` would confirm the id is real,
+which is enough to enumerate workspaces.
+
+### Sessions
+
+Tokens are 256 bits of system randomness, opaque, and stored only as a
+SHA-256 hash — a database disclosure does not hand over live sessions.
+They are not JWTs: a self-hosted server has no need to validate a token
+without touching its database, and the thing you actually want from a
+session is for `logout` to work immediately.
+
+Passwords are Argon2id at the `argon2` crate's recommended parameters. A
+login against an unregistered address performs a dummy verification, so
+response timing does not reveal which addresses exist.
+
+### Live notifications
+
+`GET /v1/workspaces/{id}/ws` upgrades to a WebSocket that emits
+`{"type":"head","seq":N}` — the current head on connect, then one message
+per change.
+
+It carries **no workspace content**, deliberately. Clients treat it purely
+as a hint to pull, so a missed, duplicated or out-of-order notification
+cannot corrupt anything; correctness lives entirely in pull/push. A client
+that falls behind is not disconnected, because the next message corrects
+it. Membership is resolved *before* the upgrade, so a non-member never
+gets a socket at all.
+
+## Administrator bootstrap
+
+On an empty server, `RELAY_ADMIN_EMAIL` and `RELAY_ADMIN_PASSWORD` create
+the first account:
+
+```sh
+RELAY_ADMIN_EMAIL=you@example.com \
+RELAY_ADMIN_PASSWORD='something long' \
+  relay-server
+```
+
+It runs **only when no users exist**, so restarting with the variables
+still set will not reset a password or resurrect a deleted account. The
+server logs a warning telling you to remove them once the account exists.
+
 ## Self-hosting
 
 SQLite needs nothing but a writable directory:

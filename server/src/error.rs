@@ -45,9 +45,18 @@ pub enum ServerError {
     #[error("could not process the password")]
     PasswordHash(String),
 
-    /// Anything unclassified.
+    /// Anything unclassified. Its detail is logged, never returned.
     #[error("internal error")]
     Internal(String),
+
+    /// The server is misconfigured.
+    ///
+    /// Keeps its message, unlike [`Self::Internal`]: this is reported to
+    /// the operator at startup before anything is listening, so there is
+    /// no client to leak it to — and "internal error" would tell them
+    /// nothing about which variable they got wrong.
+    #[error("configuration error: {0}")]
+    Config(String),
 }
 
 impl ServerError {
@@ -59,7 +68,7 @@ impl ServerError {
             Self::BadRequest(_) => StatusCode::BAD_REQUEST,
             Self::LimitExceeded { .. } => StatusCode::PAYLOAD_TOO_LARGE,
             Self::Conflict(_) => StatusCode::CONFLICT,
-            Self::Database(_) | Self::PasswordHash(_) | Self::Internal(_) => {
+            Self::Database(_) | Self::PasswordHash(_) | Self::Internal(_) | Self::Config(_) => {
                 StatusCode::INTERNAL_SERVER_ERROR
             }
         }
@@ -81,8 +90,11 @@ impl ServerError {
                 message: message.clone(),
             },
             // Internal detail stays in the log, not in the response: a
-            // database error message can disclose schema and query shape.
-            Self::Database(_) | Self::PasswordHash(_) | Self::Internal(_) => SyncError::Internal,
+            // database error message can disclose schema and query shape,
+            // and a configuration message can disclose deployment layout.
+            Self::Database(_) | Self::PasswordHash(_) | Self::Internal(_) | Self::Config(_) => {
+                SyncError::Internal
+            }
         }
     }
 }
@@ -91,7 +103,10 @@ impl IntoResponse for ServerError {
     fn into_response(self) -> Response {
         if matches!(
             self,
-            ServerError::Database(_) | ServerError::PasswordHash(_) | ServerError::Internal(_)
+            ServerError::Database(_)
+                | ServerError::PasswordHash(_)
+                | ServerError::Internal(_)
+                | ServerError::Config(_)
         ) {
             tracing::error!("{self}");
         }
@@ -121,6 +136,21 @@ mod tests {
         assert!(!body.contains("postgres://"), "leaked: {body}");
         assert!(!body.contains("connection string"));
         assert_eq!(err.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[test]
+    fn configuration_errors_name_the_problem_for_the_operator() {
+        // Startup failures are read by whoever deployed this, not by a
+        // client, so "internal error" would be useless to them.
+        let err = ServerError::Config("RELAY_BIND is not an address".into());
+        assert!(err.to_string().contains("RELAY_BIND"));
+    }
+
+    #[test]
+    fn configuration_detail_still_never_reaches_a_client() {
+        let err = ServerError::Config("postgres://user:pw@internal-host/db".into());
+        let body = serde_json::to_string(&err.to_sync_error()).unwrap();
+        assert!(!body.contains("internal-host"), "leaked: {body}");
     }
 
     #[test]

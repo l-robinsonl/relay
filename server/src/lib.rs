@@ -3,8 +3,15 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod app;
+pub mod auth;
+pub mod config;
 pub mod error;
+pub mod hub;
+pub mod routes;
 pub mod store;
 
+pub use app::{AppState, AuthenticatedUser, router};
+pub use config::Config;
 pub use error::{ServerError, ServerResult};
 pub use store::{Actor, PostgresStore, SqliteStore, SyncStore};
