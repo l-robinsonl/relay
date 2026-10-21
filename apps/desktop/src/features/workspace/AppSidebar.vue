@@ -19,11 +19,13 @@ import { useDragDrop } from '@/composables/useDragDrop'
 import EnvironmentList from '@/features/environment/EnvironmentList.vue'
 import HistoryList from '@/features/history/HistoryList.vue'
 import type { SidebarView } from '@/types/ui'
+import { useDialogStore } from '@/stores/dialogs'
 import { useTabsStore } from '@/stores/tabs'
 import { useWorkspaceStore } from '@/stores/workspace'
 
 const workspace = useWorkspaceStore()
 const tabs = useTabsStore()
+const dialogs = useDialogStore()
 
 const drag = useDragDrop()
 const view = ref<SidebarView>('collections')
@@ -63,8 +65,12 @@ async function newRequest () {
 }
 
 async function newFolder () {
-  const name = window.prompt('Folder name')
-  if (name?.trim()) await workspace.createFolder(name.trim())
+  const name = await dialogs.prompt({
+    title: 'New folder',
+    label: 'Name',
+    placeholder: 'Users',
+  })
+  if (name) await workspace.createFolder(name)
 }
 
 async function switchWorkspace (id: string) {
@@ -74,18 +80,34 @@ async function switchWorkspace (id: string) {
 
 async function newWorkspace () {
   workspaceMenuOpen.value = false
-  const name = window.prompt('Workspace name')
-  if (name?.trim()) await workspace.createWorkspace(name.trim())
+  const name = await dialogs.prompt({
+    title: 'New workspace',
+    label: 'Name',
+    description: 'A workspace holds its own collections, environments and history.',
+    placeholder: 'Work APIs',
+  })
+  if (name) await workspace.createWorkspace(name)
 }
 
 async function handleContextMenu (node: TreeNode) {
   if (node.kind === 'folder') {
-    if (window.confirm(`Delete the folder "${node.name}" and everything in it?`)) {
-      await workspace.deleteFolder(node.id)
-    }
+    const confirmed = await dialogs.confirm({
+      title: `Delete "${node.name}"?`,
+      description:
+        'Everything inside it goes too. If this workspace syncs, it is removed for everyone.',
+      confirmLabel: 'Delete folder',
+      destructive: true,
+    })
+    if (confirmed) await workspace.deleteFolder(node.id)
     return
   }
-  if (window.confirm(`Delete the request "${node.name}"?`)) {
+
+  const confirmed = await dialogs.confirm({
+    title: `Delete "${node.name}"?`,
+    confirmLabel: 'Delete request',
+    destructive: true,
+  })
+  if (confirmed) {
     await api.requestDelete(node.id)
     tabs.closeByRequestId(node.id)
     await workspace.refreshTree()

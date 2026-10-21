@@ -7,6 +7,8 @@ function rows (modelValue: KeyValue[]) {
   return mount(KeyValueEditor, { props: { modelValue } })
 }
 
+const editor = rows
+
 describe('KeyValueEditor', () => {
   it('always renders one extra blank row so adding is just typing', () => {
     const wrapper = rows([])
@@ -72,6 +74,21 @@ describe('KeyValueEditor', () => {
     const wrapper = rows([{ key: 'A', value: '1', enabled: true }])
     // One real row has a remove button; the blank one does not.
     expect(wrapper.findAll('button')).toHaveLength(1)
+  })
+
+  it('keeps the header columns aligned with the rows', () => {
+    // Tailwind's sr-only is position:absolute. An sr-only span used
+    // directly as a grid child leaves the flow, shifting every visible
+    // header one column left — which put "Parameter" and "Value" on top
+    // of each other. Each cell must be a real grid child.
+    const wrapper = editor([])
+    const header = wrapper.find('.grid')
+    const cells = header.element.children
+
+    expect(cells.length, 'the header must have one child per column').toBe(4)
+    // The screen-reader text is nested, not the grid child itself.
+    expect((cells[0] as HTMLElement).classList.contains('sr-only')).toBe(false)
+    expect((cells[0] as HTMLElement).querySelector('.sr-only')).not.toBeNull()
   })
 
   it('labels its controls for screen readers', () => {

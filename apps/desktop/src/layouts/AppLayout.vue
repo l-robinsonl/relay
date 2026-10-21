@@ -14,6 +14,7 @@ import AppSidebar from '@/features/workspace/AppSidebar.vue'
 import CommandPalette, { type Command } from '@/features/command-palette/CommandPalette.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import ConflictPanel from '@/features/sync/ConflictPanel.vue'
+import DialogHost from '@/components/ui/DialogHost.vue'
 import ImportDialog from '@/features/import-export/ImportDialog.vue'
 import SyncIndicator from '@/features/sync/SyncIndicator.vue'
 import SyncSettings from '@/features/sync/SyncSettings.vue'
@@ -363,6 +364,7 @@ onBeforeUnmount(() => {
     <ImportDialog :open="importOpen" @close="importOpen = false" />
     <SyncSettings :open="syncSettingsOpen" @close="syncSettingsOpen = false" />
     <ConflictPanel :open="conflictsOpen" @close="conflictsOpen = false" />
+    <DialogHost />
     <ToastHost />
   </div>
 </template>

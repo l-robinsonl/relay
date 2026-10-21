@@ -4,6 +4,7 @@ import { CheckCircle2, Cloud, Loader2, X } from '@lucide/vue'
 import type { ServerHealth } from '@/services/ipc'
 import { api } from '@/services/ipc'
 import { formatRelativeTime } from '@/composables/useFormat'
+import { useDialogStore } from '@/stores/dialogs'
 import { useSyncStore } from '@/stores/sync'
 
 /** Connecting a workspace to a server, or disconnecting it. */
@@ -11,6 +12,7 @@ const props = defineProps<{ open: boolean }>()
 const emit = defineEmits<{ close: [] }>()
 
 const sync = useSyncStore()
+const dialogs = useDialogStore()
 
 const serverUrl = ref('')
 const email = ref('')
@@ -75,13 +77,14 @@ async function connect () {
 }
 
 async function disconnect () {
-  if (
-    !window.confirm(
-      'Stop syncing this workspace? Everything stays on this machine — only the connection is removed.',
-    )
-  ) {
-    return
-  }
+  const confirmed = await dialogs.confirm({
+    title: 'Stop syncing this workspace?',
+    description:
+      'Every request, collection and environment stays on this machine. Only the link to the server is removed.',
+    confirmLabel: 'Disconnect',
+  })
+  if (!confirmed) return
+
   await sync.disconnect()
   emit('close')
 }

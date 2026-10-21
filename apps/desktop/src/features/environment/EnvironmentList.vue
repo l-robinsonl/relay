@@ -4,11 +4,13 @@ import { Eye, EyeOff, Key, Plus, Settings2, Trash2 } from '@lucide/vue'
 import type { Environment, Variable } from '@relay/shared-types'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import { api } from '@/services/ipc'
+import { useDialogStore } from '@/stores/dialogs'
 import { useToastStore } from '@/stores/toast'
 import { useWorkspaceStore } from '@/stores/workspace'
 
 const workspace = useWorkspaceStore()
 const toasts = useToastStore()
+const dialogs = useDialogStore()
 
 const editingId = ref<string | null>(null)
 const secretDraft = ref<Record<string, string>>({})
@@ -25,14 +27,26 @@ const rows = computed<Variable[]>(() => [
 ])
 
 async function create () {
-  const name = window.prompt('Environment name', 'Development')
-  if (!name?.trim()) return
-  const environment = await workspace.createEnvironment(name.trim())
+  const name = await dialogs.prompt({
+    title: 'New environment',
+    label: 'Name',
+    description: 'Environments hold the values that change between Development and Production.',
+    value: 'Development',
+  })
+  if (!name) return
+  const environment = await workspace.createEnvironment(name)
   if (environment) editingId.value = environment.id
 }
 
 async function remove (id: string, name: string) {
-  if (!window.confirm(`Delete the environment "${name}"?`)) return
+  const confirmed = await dialogs.confirm({
+    title: `Delete "${name}"?`,
+    description: 'Any secret values you stored for it stay in your credential store.',
+    confirmLabel: 'Delete environment',
+    destructive: true,
+  })
+  if (!confirmed) return
+
   await workspace.deleteEnvironment(id)
   if (editingId.value === id) editingId.value = null
 }

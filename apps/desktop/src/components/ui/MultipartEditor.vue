@@ -72,11 +72,11 @@ function fileName (path: string) {
              gap-x-2 border-b border-subtle px-3 py-1.5 text-xxs font-medium uppercase
              tracking-wide text-muted"
     >
-      <span class="sr-only">Enabled</span>
+      <span><span class="sr-only">Enabled</span></span>
       <span>Field</span>
-      <span class="sr-only">Type</span>
+      <span><span class="sr-only">Type</span></span>
       <span>Value</span>
-      <span class="sr-only">Remove</span>
+      <span><span class="sr-only">Remove</span></span>
     </div>
 
     <div

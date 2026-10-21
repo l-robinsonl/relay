@@ -6,6 +6,7 @@ import EmptyState from '@/components/ui/EmptyState.vue'
 import MethodBadge from '@/components/ui/MethodBadge.vue'
 import { formatDuration, formatRelativeTime, statusTone } from '@/composables/useFormat'
 import { api } from '@/services/ipc'
+import { useDialogStore } from '@/stores/dialogs'
 import { useTabsStore } from '@/stores/tabs'
 import { useToastStore } from '@/stores/toast'
 import { useWorkspaceStore } from '@/stores/workspace'
@@ -13,6 +14,7 @@ import { useWorkspaceStore } from '@/stores/workspace'
 const workspace = useWorkspaceStore()
 const tabs = useTabsStore()
 const toasts = useToastStore()
+const dialogs = useDialogStore()
 
 const entries = ref<HistoryEntry[]>([])
 const loading = ref(false)
@@ -38,7 +40,15 @@ async function load () {
 
 async function clear () {
   if (!workspace.current) return
-  if (!window.confirm('Clear the request history for this workspace?')) return
+
+  const confirmed = await dialogs.confirm({
+    title: 'Clear request history?',
+    description: `${entries.value.length} entries will be removed from this machine. History is never synced, so this cannot be recovered from a server.`,
+    confirmLabel: 'Clear history',
+    destructive: true,
+  })
+  if (!confirmed) return
+
   await api.historyClear(workspace.current.id)
   await load()
 }

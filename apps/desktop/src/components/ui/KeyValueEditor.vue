@@ -62,10 +62,10 @@ function remove (index: number) {
              border-b border-subtle px-3 py-1.5 text-xxs font-medium uppercase
              tracking-wide text-muted"
     >
-      <span class="sr-only">Enabled</span>
+      <span><span class="sr-only">Enabled</span></span>
       <span>{{ keyPlaceholder }}</span>
       <span>{{ valuePlaceholder }}</span>
-      <span class="sr-only">Remove</span>
+      <span><span class="sr-only">Remove</span></span>
     </div>
 
     <div
