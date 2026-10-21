@@ -22,6 +22,8 @@
     "rust:fmt": "cargo fmt --all",
     "rust:lint": "cargo clippy --workspace --all-targets -- -D warnings",
     "check:deps": "./scripts/check-deps.sh",
-    "verify": "npm run check:deps || true && npm run rust:test && npm run rust:lint && npm run typecheck && npm test && npm run build"
+    "verify": "npm run check:deps || true && npm run rust:test && npm run rust:lint && npm run typecheck && npm test && npm run build",
+    "desktop:install": "./scripts/install-desktop-entry.sh",
+    "desktop:remove": "./scripts/install-desktop-entry.sh --remove"
   }
 }

@@ -54,6 +54,28 @@ Xcode command line tools: `xcode-select --install`.
 Microsoft C++ Build Tools, and WebView2 (preinstalled on Windows 11; the
 installer bundles a bootstrapper for Windows 10).
 
+### The window icon on Linux
+
+Running Relay straight out of `target/` shows a generic icon in the
+titlebar and task switcher. That is not a bug in the build.
+
+On Wayland an application cannot set its own window icon — there is no
+protocol for it. The compositor matches the window's `app_id` against an
+installed `.desktop` file and uses the icon named there. A binary run from
+a build directory has installed nothing, so there is no match.
+
+Installing the `.deb` or `.rpm` fixes it system-wide. For development:
+
+```sh
+./scripts/install-desktop-entry.sh            # user-level, no root
+./scripts/install-desktop-entry.sh --remove   # undo
+```
+
+`StartupWMClass` in that entry must equal the window's `app_id`, which GTK
+takes from the binary's name (`relay-desktop`). Renaming the binary
+without updating both breaks the match silently — the only symptom is the
+wrong icon.
+
 ## Layout
 
 | Path | What it is |
