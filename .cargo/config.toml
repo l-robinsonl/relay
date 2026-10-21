@@ -1,0 +1,4 @@
+[env]
+# ts-rs writes the generated TypeScript definitions here, so the frontend
+# consumes the same contract the Rust side compiles against.
+TS_RS_EXPORT_DIR = { value = "packages/shared-types/src/generated", relative = true }

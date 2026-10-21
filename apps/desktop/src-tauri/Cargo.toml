@@ -1,0 +1,38 @@
+[package]
+name = "relay-desktop"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Relay desktop application."
+publish = false
+
+[lib]
+# Tauri builds the app as a library so the mobile targets can link it; the
+# binary below is just an entry point.
+name = "relay_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.7", features = [] }
+
+[dependencies]
+relay-models.workspace = true
+relay-core.workspace = true
+relay-http.workspace = true
+relay-storage.workspace = true
+relay-app.workspace = true
+
+tauri = { version = "2.12", features = [] }
+tauri-plugin-dialog = "2.8"
+tauri-plugin-opener = "2.7"
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[features]
+# Enabled by `tauri dev`; keeps devtools out of release builds.
+default = []

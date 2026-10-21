@@ -1,0 +1,3 @@
+# Generated from the Rust types; reviewable in a diff but not hand-edited.
+packages/shared-types/src/generated/** linguist-generated=true
+* text=auto eol=lf

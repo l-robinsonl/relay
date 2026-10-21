@@ -1,0 +1,32 @@
+# Secrets — never commit. See .env.example for the expected keys.
+.env
+.env.*
+!.env.example
+*.pem
+*.p12
+*.pfx
+
+# Rust
+/target
+**/target
+
+# Node
+node_modules
+dist
+dist-ssr
+.vite
+*.tsbuildinfo
+
+# Tauri
+apps/desktop/src-tauri/gen
+apps/desktop/src-tauri/target
+
+# Local data / scratch
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+/data
+coverage
+.DS_Store

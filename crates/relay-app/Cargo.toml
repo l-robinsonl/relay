@@ -1,0 +1,23 @@
+[package]
+name = "relay-app"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Relay application services: the logic behind every Tauri command."
+
+[dependencies]
+relay-models.workspace = true
+relay-core.workspace = true
+relay-http.workspace = true
+relay-storage.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+dirs = "7.0"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full"] }
+axum = "0.8"

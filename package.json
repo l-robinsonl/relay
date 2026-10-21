@@ -1,0 +1,27 @@
+{
+  "name": "relay",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "dev": "npm run dev --workspace=@relay/desktop",
+    "build": "npm run build --workspace=@relay/desktop",
+    "tauri": "npm run tauri --workspace=@relay/desktop",
+    "test": "npm run test --workspace=@relay/desktop",
+    "typecheck": "npm run typecheck --workspace=@relay/desktop",
+    "lint": "npm run lint --workspace=@relay/desktop",
+    "bindings": "cargo test -p relay-models export_bindings",
+    "rust:test": "cargo test --workspace --exclude relay-desktop",
+    "rust:fmt": "cargo fmt --all",
+    "rust:lint": "cargo clippy --workspace --exclude relay-desktop --all-targets -- -D warnings",
+    "check:deps": "./scripts/check-deps.sh",
+    "verify": "npm run check:deps || true && npm run rust:test && npm run rust:lint && npm run typecheck && npm test && npm run build"
+  }
+}
