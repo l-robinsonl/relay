@@ -35,8 +35,15 @@ other way round:
 
 ## Install
 
-No binaries are published yet. To run it from source, see
-[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
+No binaries are published yet, but `npm run tauri build` produces real
+installers — `.deb`, `.rpm` and `.AppImage` on Linux, `.msi`/`.exe` on
+Windows, `.dmg` on macOS. See [docs/RELEASING.md](docs/RELEASING.md).
+
+Nothing is code-signed yet, so Windows SmartScreen will warn and macOS
+Gatekeeper will refuse outright. That is stated plainly rather than left
+for you to discover at the dialog.
+
+To run it from source, see [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 
 ```sh
 git clone <this repository> && cd relay
@@ -109,7 +116,7 @@ Stated plainly, because a README that implies otherwise wastes your time:
 | 2 | Collections, environments, interpolation, auth, history, import/export | **Done** |
 | 3 | Self-hosted Axum sync server, users, revisions, WebSockets, conflicts | **Done** |
 | 4 | OAuth 2.0 flows, sandboxed scripting, OpenAPI import, certificates | Designed |
-| 5 | Installers, signing, CI, benchmarks, security review | Not started |
+| 5 | Installers, signing, CI, benchmarks, security review | In progress — installers build, signing and CI unrun |
 | 6 | Relay Cloud on Neon Postgres, multitenant, RLS | Designed |
 | 7 | Stripe billing, per-seat annual subscriptions, entitlements | Designed |
 

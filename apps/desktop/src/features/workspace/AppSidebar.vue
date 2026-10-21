@@ -240,7 +240,7 @@ async function deleteNode (node: TreeNode) {
 </script>
 
 <template>
-  <aside class="flex h-full flex-col surface-sunken">
+  <aside class="flex h-full min-w-0 flex-col surface-sunken">
     <!-- Workspace switcher -->
     <div class="relative shrink-0 border-b border-subtle px-2 py-2">
       <button
@@ -309,8 +309,8 @@ async function deleteNode (node: TreeNode) {
         v-for="item in views"
         :key="item.id"
         type="button"
-        class="flex flex-1 items-center justify-center gap-1.5 rounded px-2 py-1.5
-               text-xs font-medium transition-colors"
+        class="flex min-w-0 flex-1 items-center justify-center gap-1.5 rounded px-2
+               py-1.5 text-xs font-medium transition-colors"
         :class="
           view === item.id
             ? 'bg-[var(--accent-muted)] text-primary'
@@ -319,8 +319,8 @@ async function deleteNode (node: TreeNode) {
         :aria-current="view === item.id ? 'page' : undefined"
         @click="view = item.id"
       >
-        <component :is="item.icon" :size="13" />
-        <span>{{ item.label }}</span>
+        <component :is="item.icon" :size="13" class="shrink-0" />
+        <span class="truncate">{{ item.label }}</span>
       </button>
     </nav>
 

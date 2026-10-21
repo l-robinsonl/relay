@@ -307,9 +307,12 @@ onBeforeUnmount(() => {
 
     <!-- Body -->
     <div class="flex min-h-0 flex-1">
+      <!-- overflow-hidden matters: the sidebar has a fixed pixel width,
+           and anything inside it that refuses to shrink would otherwise
+           spill into the editor, which paints over it. -->
       <div
         v-if="settings.sidebarVisible"
-        class="shrink-0 border-r border-subtle"
+        class="min-w-0 shrink-0 overflow-hidden border-r border-subtle"
         :style="{ width: `${settings.sidebarWidth}px` }"
       >
         <AppSidebar />
