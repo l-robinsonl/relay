@@ -6,6 +6,8 @@ members = [
     "crates/relay-storage",
     "crates/relay-core",
     "crates/relay-app",
+    "crates/relay-sync",
+    "server",
     "apps/desktop/src-tauri",
 ]
 

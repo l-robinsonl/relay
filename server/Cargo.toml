@@ -1,0 +1,47 @@
+[package]
+name = "relay-server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Relay's self-hostable synchronisation server."
+
+[[bin]]
+name = "relay-server"
+path = "src/main.rs"
+
+[lib]
+name = "relay_server"
+path = "src/lib.rs"
+
+[dependencies]
+relay-models.workspace = true
+relay-sync.workspace = true
+
+axum = { version = "0.8", features = ["macros", "ws"] }
+tokio = { workspace = true, features = ["full"] }
+tower = "0.5"
+tower-http = { version = "0.7", features = ["trace", "cors", "limit", "timeout"] }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+tracing.workspace = true
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+async-trait = "0.1"
+argon2 = "0.6"
+rand = "0.10"
+sha2 = "0.11"
+subtle = "2.6"
+base64.workspace = true
+futures-util.workspace = true
+
+[dependencies.sqlx]
+version = "0.9"
+default-features = false
+features = ["runtime-tokio", "tls-rustls-aws-lc-rs", "sqlite", "postgres", "json", "macros", "migrate"]
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
