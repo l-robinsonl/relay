@@ -65,8 +65,9 @@ npm run tauri dev
 **HTTP engine** — GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS and arbitrary
 custom methods. JSON, text, XML, form-urlencoded, multipart, GraphQL and raw
 binary bodies, with file uploads streamed from disk. Basic, bearer, API-key
-and OAuth 2.0 auth. Per-request timeouts, redirect policy, proxies, client certificates, a
-shared cookie jar, and automatic gzip/brotli/deflate/zstd decoding. Real
+and OAuth 2.0 auth. Per-request timeouts, redirect policy, proxies, client
+certificates scoped to the hosts you name, a shared cookie jar, and automatic
+gzip/brotli/deflate/zstd decoding. Real
 cancellation that closes the connection. Responses are bounded and spool to
 disk instead of filling memory.
 
@@ -121,8 +122,9 @@ the strength of a timestamp. Secret values never leave your device.
 Stated plainly, because a README that implies otherwise wastes your time:
 
 - **Relay Cloud and billing.** Designed, not built.
-- **Client certificates.** The engine presents them; there is no settings
-  screen to configure one yet.
+- **Encrypted client-certificate keys.** `rustls` cannot ask for a
+  passphrase, so the key in the PEM has to be decrypted first. Relay says
+  so, and says how.
 - **The OAuth 2.0 implicit grant.** Deliberately not implemented: it
   returns tokens in a URL fragment and issues no refresh token. Use the
   authorization code grant with PKCE, which Relay supports.
@@ -135,7 +137,7 @@ Stated plainly, because a README that implies otherwise wastes your time:
 | 1 | Desktop shell, HTTP engine, SQLite persistence, save and reopen | **Done** |
 | 2 | Collections, environments, interpolation, auth, history, import/export | **Done** |
 | 3 | Self-hosted Axum sync server, users, revisions, WebSockets, conflicts | **Done** |
-| 4 | OAuth 2.0 flows, certificates | In progress — OAuth, OpenAPI import and scripting done; no certificate UI |
+| 4 | OAuth 2.0, scripting, OpenAPI import, certificates | **Done** |
 | 5 | Installers, signing, CI, benchmarks, security review | In progress — installers build, signing and CI unrun |
 | 6 | Relay Cloud on Neon Postgres, multitenant, RLS | Designed |
 | 7 | Stripe billing, per-seat annual subscriptions, entitlements | Designed |

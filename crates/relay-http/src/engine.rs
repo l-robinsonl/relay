@@ -200,7 +200,7 @@ impl HttpEngine {
         let headers = build::build_headers(spec)?;
         let body = build::prepare_body(&spec.body).await?;
 
-        let client = self.pool.get(&spec.settings)?;
+        let client = self.pool.get(&spec.settings, url.host_str())?;
         let method = reqwest::Method::from_bytes(spec.method.as_str().as_bytes())
             .map_err(|e| EngineError::InvalidUrl(format!("invalid HTTP method: {e}")))?;
 

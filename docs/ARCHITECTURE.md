@@ -294,7 +294,7 @@ place that decides what leaves the device. Postman writes secret values into
 its export files in the clear; Relay reads the name, drops the value, and
 tells the user to enter it again.
 | **3** | Axum server, admin bootstrap, users, membership, revision sync, WebSockets, outbox, conflicts, Docker | Two users share a workspace, edit offline, reconnect and converge with no silent loss |
-| **4** | OAuth 2.0, sandboxed scripting and assertions, OpenAPI import, advanced search, certificates, performance work | — |
+| **4** | OAuth 2.0, sandboxed scripting and assertions, OpenAPI import, advanced search, certificates, performance work | Done |
 | **5** | Installers, signing guidance, CI, migration/recovery tests, security review, benchmarks | — |
 | **6** | Relay Cloud: Neon Postgres behind the same `SyncStore` trait, shared multitenant schema, RLS, quotas | The hosted service speaks the identical `/v1` sync API; a workspace migrates between modes without export/import |
 | **7** | Stripe Checkout, per-seat annual subscriptions, entitlements, webhooks, billing portal | Seats are enforced server-side; a lapsed subscription still permits full data export |

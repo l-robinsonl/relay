@@ -30,11 +30,11 @@ Phases 1–3 complete. Phase 4 mostly. Phase 5 part-done.
 | Sync | Axum server, users, membership, revisions, conflicts, WebSocket live updates, client engine |
 | Scripting | QuickJS sandbox, assertions, test results panel, pre-request scripts that may rewrite the request |
 | OAuth 2.0 | authorization code + PKCE via loopback, client credentials, password; in-memory token cache, silent refresh |
+| TLS | per-request verification toggle, client certificates with host matching, proxies — all reachable from Settings |
 | Packaging | `.deb` / `.rpm` / `.AppImage` build |
 
 | Not built | |
 |---|---|
-| Client certificate UI | engine supports it, no settings screen |
 | Relay Cloud / billing | designed only (Phases 6–7) |
 | CI | written, never executed — no git remote |
 | Signing | nothing signed; macOS Gatekeeper will refuse outright |
@@ -180,10 +180,12 @@ Quote PSS. Never quote a figure this project did not measure.
 
 ## Next
 
-1. Client certificate settings UI.
-2. CI — written at `.github/workflows/ci.yml`, never run.
-3. Phase 6/7 — Relay Cloud on Neon, then Stripe. Billing last, by the
+1. CI — written at `.github/workflows/ci.yml`, never run.
+2. Phase 6/7 — Relay Cloud on Neon, then Stripe. Billing last, by the
    user's own sequencing.
+
+Phase 4 is finished. What is left in Phase 5 is CI and signing, both of
+which need a git remote and a certificate respectively.
 
 **Pre-request scripts, as built.** `ScriptEngine::run_pre_request` returns
 a `RequestPatch` (in `relay-models`, applied by

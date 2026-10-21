@@ -25,8 +25,37 @@ pub(crate) struct ClientKey {
     timeout_ms: Option<u64>,
 }
 
+/// True when a certificate should be presented to this host.
+///
+/// An empty host list means every host, which is the common case: the
+/// setting is already per-request. Naming hosts is for a certificate
+/// shared by a folder of requests, where it should go to the internal
+/// service and not to the public API next to it.
+fn certificate_applies(cert: &ClientCertificate, host: Option<&str>) -> bool {
+    if cert.hosts.is_empty() {
+        return true;
+    }
+
+    let Some(host) = host else {
+        return false;
+    };
+
+    cert.hosts.iter().any(|pattern| {
+        let pattern = pattern.trim().trim_start_matches('.');
+        if pattern.is_empty() {
+            return false;
+        }
+        // `example.com` covers `api.example.com`, as a certificate
+        // scoped to an internal domain is meant to.
+        host.eq_ignore_ascii_case(pattern)
+            || host.len() > pattern.len()
+                && host.as_bytes()[host.len() - pattern.len() - 1] == b'.'
+                && host[host.len() - pattern.len()..].eq_ignore_ascii_case(pattern)
+    })
+}
+
 impl ClientKey {
-    pub(crate) fn from_settings(settings: &RequestSettings) -> Self {
+    pub(crate) fn from_settings(settings: &RequestSettings, host: Option<&str>) -> Self {
         Self {
             verify_tls: settings.verify_tls,
             redirect: match settings.redirect_policy {
@@ -37,9 +66,13 @@ impl ClientKey {
             cookies: settings.store_cookies || settings.send_cookies,
             proxy: settings.proxy.as_ref().map(|p| p.url.clone()),
             proxy_user: settings.proxy.as_ref().and_then(|p| p.username.clone()),
+            // A certificate that does not apply to this host is not part
+            // of the key: those requests share one client, rather than
+            // each host getting a connection pool of its own.
             cert_path: settings
                 .client_certificate
                 .as_ref()
+                .filter(|c| certificate_applies(c, host))
                 .map(|c| c.pem_path.clone()),
             timeout_ms: settings.timeout_ms,
         }
@@ -100,8 +133,12 @@ impl ClientPool {
     }
 
     /// Returns a client matching `settings`, building one if necessary.
-    pub fn get(&self, settings: &RequestSettings) -> Result<reqwest::Client, EngineError> {
-        let key = ClientKey::from_settings(settings);
+    pub fn get(
+        &self,
+        settings: &RequestSettings,
+        host: Option<&str>,
+    ) -> Result<reqwest::Client, EngineError> {
+        let key = ClientKey::from_settings(settings, host);
 
         if let Ok(guard) = self.clients.lock()
             && let Some(client) = guard.get(&key)
@@ -109,7 +146,7 @@ impl ClientPool {
             return Ok(client.clone());
         }
 
-        let client = self.build(settings)?;
+        let client = self.build(settings, host)?;
 
         if let Ok(mut guard) = self.clients.lock() {
             // Another thread may have inserted while we were building; either
@@ -120,7 +157,11 @@ impl ClientPool {
         Ok(client)
     }
 
-    fn build(&self, settings: &RequestSettings) -> Result<reqwest::Client, EngineError> {
+    fn build(
+        &self,
+        settings: &RequestSettings,
+        host: Option<&str>,
+    ) -> Result<reqwest::Client, EngineError> {
         let mut builder = reqwest::Client::builder()
             .user_agent(self.user_agent.clone())
             .cookie_provider(self.cookie_jar())
@@ -164,7 +205,9 @@ impl ClientPool {
             builder = builder.proxy(build_proxy(proxy)?);
         }
 
-        if let Some(cert) = &settings.client_certificate {
+        if let Some(cert) = &settings.client_certificate
+            && certificate_applies(cert, host)
+        {
             builder = builder.identity(load_identity(cert)?);
         }
 
@@ -195,8 +238,26 @@ fn load_identity(cert: &ClientCertificate) -> Result<reqwest::Identity, EngineEr
         EngineError::ClientCertificate(format!("cannot read {}: {e}", cert.pem_path))
     })?;
 
+    // An encrypted key fails inside rustls with a message about PKCS#8
+    // parsing, which sends people looking in the wrong place entirely.
+    if is_encrypted(&pem) {
+        return Err(EngineError::ClientCertificate(format!(
+            "the private key in {} is encrypted, and Relay cannot ask for its \
+             passphrase. Decrypt it first: \
+             openssl pkey -in key.pem -out key-decrypted.pem",
+            cert.pem_path
+        )));
+    }
+
     reqwest::Identity::from_pem(&pem)
         .map_err(|e| EngineError::ClientCertificate(format!("invalid PEM identity: {e}")))
+}
+
+/// True when the PEM holds a passphrase-protected private key.
+fn is_encrypted(pem: &[u8]) -> bool {
+    let text = String::from_utf8_lossy(pem);
+    // PKCS#8 encrypted keys, and the older OpenSSL per-key header.
+    text.contains("ENCRYPTED PRIVATE KEY") || text.contains("Proc-Type: 4,ENCRYPTED")
 }
 
 #[cfg(test)]
@@ -206,8 +267,8 @@ mod tests {
     #[test]
     fn clients_are_reused_for_equivalent_settings() {
         let pool = ClientPool::new(Duration::from_secs(30), "relay-test");
-        let a = pool.get(&RequestSettings::default()).unwrap();
-        let b = pool.get(&RequestSettings::default()).unwrap();
+        let a = pool.get(&RequestSettings::default(), None).unwrap();
+        let b = pool.get(&RequestSettings::default(), None).unwrap();
         // reqwest::Client is an Arc internally; the pool must hand back the
         // same one so the connection pool survives between requests.
         assert_eq!(Arc::strong_count(&pool.clients), 1);
@@ -223,8 +284,8 @@ mod tests {
             verify_tls: false,
             ..Default::default()
         };
-        pool.get(&secure).unwrap();
-        pool.get(&insecure).unwrap();
+        pool.get(&secure, None).unwrap();
+        pool.get(&insecure, None).unwrap();
         assert_eq!(pool.clients.lock().unwrap().len(), 2);
     }
 
@@ -237,7 +298,10 @@ mod tests {
             max_response_bytes: Some(1024),
             ..Default::default()
         };
-        assert_eq!(ClientKey::from_settings(&a), ClientKey::from_settings(&b));
+        assert_eq!(
+            ClientKey::from_settings(&a, None),
+            ClientKey::from_settings(&b, None)
+        );
     }
 
     #[test]
@@ -246,7 +310,7 @@ mod tests {
         // so leaving it in place would keep sending cookies the user just
         // cleared.
         let pool = ClientPool::new(Duration::from_secs(30), "relay-test");
-        pool.get(&RequestSettings::default()).unwrap();
+        pool.get(&RequestSettings::default(), None).unwrap();
         assert_eq!(pool.clients.lock().unwrap().len(), 1);
 
         let before = pool.cookie_jar();
@@ -271,7 +335,97 @@ mod tests {
             }),
             ..Default::default()
         };
-        assert!(pool.get(&settings).is_err());
+        assert!(pool.get(&settings, None).is_err());
+    }
+
+    fn certificate_for(hosts: &[&str]) -> ClientCertificate {
+        ClientCertificate {
+            hosts: hosts.iter().map(|h| h.to_string()).collect(),
+            pem_path: "/tmp/client.pem".into(),
+        }
+    }
+
+    #[test]
+    fn a_certificate_with_no_hosts_goes_everywhere() {
+        // The usual case: the setting is already per-request, so naming
+        // a host adds nothing unless the setting is shared.
+        let cert = certificate_for(&[]);
+        assert!(certificate_applies(&cert, Some("api.example.com")));
+        assert!(certificate_applies(&cert, None));
+    }
+
+    #[test]
+    fn a_named_host_matches_itself_and_its_subdomains() {
+        let cert = certificate_for(&["internal.example.com"]);
+
+        assert!(certificate_applies(&cert, Some("internal.example.com")));
+        assert!(certificate_applies(&cert, Some("api.internal.example.com")));
+        assert!(certificate_applies(&cert, Some("INTERNAL.EXAMPLE.COM")));
+    }
+
+    #[test]
+    fn a_host_that_merely_ends_with_the_name_does_not_match() {
+        // `notinternal.example.com` is a different host, and an attacker
+        // who can register one should not be handed a client
+        // certificate because of a suffix comparison.
+        let cert = certificate_for(&["internal.example.com"]);
+
+        assert!(!certificate_applies(&cert, Some("notinternal.example.com")));
+        assert!(!certificate_applies(&cert, Some("example.com")));
+        assert!(!certificate_applies(&cert, Some("evil.com")));
+        assert!(!certificate_applies(&cert, None));
+    }
+
+    #[test]
+    fn a_leading_dot_is_accepted_as_people_write_it() {
+        let cert = certificate_for(&[".example.com"]);
+        assert!(certificate_applies(&cert, Some("api.example.com")));
+        assert!(certificate_applies(&cert, Some("example.com")));
+    }
+
+    #[test]
+    fn a_certificate_that_does_not_apply_is_not_part_of_the_cache_key() {
+        // Otherwise every host would get a connection pool of its own
+        // even though none of them present a certificate.
+        let settings = RequestSettings {
+            client_certificate: Some(certificate_for(&["internal.example.com"])),
+            ..Default::default()
+        };
+
+        let inside = ClientKey::from_settings(&settings, Some("api.internal.example.com"));
+        let outside = ClientKey::from_settings(&settings, Some("api.public.com"));
+        let none = ClientKey::from_settings(&RequestSettings::default(), Some("api.public.com"));
+
+        assert_ne!(inside, outside);
+        assert_eq!(outside, none);
+    }
+
+    #[test]
+    fn an_encrypted_private_key_says_how_to_fix_it() {
+        // Otherwise rustls reports a PKCS#8 parsing failure, which sends
+        // people looking at their certificate rather than their key.
+        let dir = std::env::temp_dir().join(format!("relay-cert-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("encrypted.pem");
+        std::fs::write(
+            &path,
+            "-----BEGIN ENCRYPTED PRIVATE KEY-----\nMIIB\n-----END ENCRYPTED PRIVATE KEY-----\n",
+        )
+        .unwrap();
+
+        let cert = ClientCertificate {
+            hosts: Vec::new(),
+            pem_path: path.to_string_lossy().into_owned(),
+        };
+
+        let error = load_identity(&cert).unwrap_err().to_string();
+        assert!(error.contains("encrypted"), "{error}");
+        assert!(
+            error.contains("openssl pkey"),
+            "it should say how to fix it: {error}"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
@@ -281,11 +435,10 @@ mod tests {
             client_certificate: Some(ClientCertificate {
                 hosts: vec![],
                 pem_path: "/nonexistent/relay-test.pem".into(),
-                passphrase: None,
             }),
             ..Default::default()
         };
-        let err = pool.get(&settings).unwrap_err();
+        let err = pool.get(&settings, None).unwrap_err();
         assert!(matches!(err, EngineError::ClientCertificate(_)));
     }
 }

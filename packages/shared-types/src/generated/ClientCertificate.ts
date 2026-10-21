@@ -10,5 +10,11 @@ export type ClientCertificate = {
 hosts: Array<string>, 
 /**
  * PEM file containing the certificate chain and private key.
+ *
+ * The key must not be encrypted: `rustls` has no way to ask for a
+ * passphrase, so there was a `passphrase` field here that nothing
+ * ever read. A field that silently does nothing is worse than no
+ * field, so the engine now says plainly that the key needs
+ * decrypting instead.
  */
-pemPath: string, passphrase?: string | null, };
+pemPath: string, };

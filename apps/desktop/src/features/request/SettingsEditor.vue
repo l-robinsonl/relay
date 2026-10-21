@@ -1,12 +1,50 @@
 <script setup lang="ts">
-import { AlertTriangle } from '@lucide/vue'
-import type { RequestSettings } from '@relay/shared-types'
+import { AlertTriangle, FileKey, FolderOpen } from '@lucide/vue'
+import type { ClientCertificate, ProxyConfig, RequestSettings } from '@relay/shared-types'
 
 const props = defineProps<{ modelValue: RequestSettings }>()
 const emit = defineEmits<{ 'update:modelValue': [RequestSettings] }>()
 
 function patch (changes: Partial<RequestSettings>) {
   emit('update:modelValue', { ...props.modelValue, ...changes })
+}
+
+// --- client certificate ---------------------------------------------------
+
+const BLANK_CERTIFICATE: ClientCertificate = { hosts: [], pemPath: '' }
+
+function patchCertificate (changes: Partial<ClientCertificate>) {
+  patch({
+    clientCertificate: {
+      ...(props.modelValue.clientCertificate ?? BLANK_CERTIFICATE),
+      ...changes,
+    },
+  })
+}
+
+async function pickCertificate () {
+  const { open } = await import('@tauri-apps/plugin-dialog')
+  const selected = await open({
+    multiple: false,
+    filters: [{ name: 'PEM certificate', extensions: ['pem', 'crt', 'cer', 'key'] }],
+  })
+  if (typeof selected === 'string') patchCertificate({ pemPath: selected })
+}
+
+/** Host lists are edited as text and stored as a list. */
+function parseHosts (text: string): string[] {
+  return text
+    .split(',')
+    .map((host) => host.trim())
+    .filter((host) => host !== '')
+}
+
+// --- proxy ----------------------------------------------------------------
+
+const BLANK_PROXY: ProxyConfig = { url: '', username: null, password: null, bypass: [] }
+
+function patchProxy (changes: Partial<ProxyConfig>) {
+  patch({ proxy: { ...(props.modelValue.proxy ?? BLANK_PROXY), ...changes } })
 }
 </script>
 
@@ -164,5 +202,154 @@ function patch (changes: Partial<RequestSettings>) {
         </span>
       </label>
     </div>
+
+    <!-- Client certificate. Mutual TLS: the server asks the client to
+         prove who it is, which internal services often do. -->
+    <fieldset class="space-y-2.5">
+      <legend class="mb-1 text-xs font-medium text-secondary">Client certificate</legend>
+
+      <label class="flex cursor-pointer items-center gap-2 text-xs text-secondary">
+        <input
+          type="checkbox"
+          class="h-3.5 w-3.5 accent-[var(--accent)]"
+          :checked="modelValue.clientCertificate !== null && modelValue.clientCertificate !== undefined"
+          @change="
+            patch({
+              clientCertificate: ($event.target as HTMLInputElement).checked
+                ? BLANK_CERTIFICATE
+                : null,
+            })
+          "
+        />
+        Present a certificate during the TLS handshake
+      </label>
+
+      <div v-if="modelValue.clientCertificate" class="space-y-2.5 pl-5">
+        <div>
+          <label for="cert-path" class="mb-1 block text-xs font-medium text-secondary">
+            PEM file
+          </label>
+          <div class="flex gap-2">
+            <input
+              id="cert-path"
+              class="input input-mono"
+              :value="modelValue.clientCertificate.pemPath"
+              placeholder="/etc/ssl/private/client.pem"
+              spellcheck="false"
+              @input="patchCertificate({ pemPath: ($event.target as HTMLInputElement).value })"
+            />
+            <button type="button" class="btn shrink-0 gap-1.5 text-xs" @click="pickCertificate">
+              <FolderOpen class="size-3.5" />
+              Choose
+            </button>
+          </div>
+          <p class="mt-1.5 flex items-start gap-1.5 text-xs text-muted">
+            <FileKey class="mt-px size-3.5 shrink-0" />
+            <span>
+              One file holding the certificate chain and its private key. Relay reads it
+              at send time and never copies it into the database, an export or a sync
+              payload — only this path travels.
+            </span>
+          </p>
+        </div>
+
+        <div>
+          <label for="cert-hosts" class="mb-1 block text-xs font-medium text-secondary">
+            Only for these hosts <span class="font-normal text-muted">(optional)</span>
+          </label>
+          <input
+            id="cert-hosts"
+            class="input input-mono"
+            :value="modelValue.clientCertificate.hosts.join(', ')"
+            placeholder="internal.example.com, api.corp"
+            spellcheck="false"
+            @input="patchCertificate({ hosts: parseHosts(($event.target as HTMLInputElement).value) })"
+          />
+          <p class="mt-1.5 max-w-prose text-xs text-muted">
+            Comma separated. A name also covers its subdomains. Leave blank to present
+            the certificate to whatever host this request goes to.
+          </p>
+        </div>
+      </div>
+    </fieldset>
+
+    <!-- Proxy. -->
+    <fieldset class="space-y-2.5">
+      <legend class="mb-1 text-xs font-medium text-secondary">Proxy</legend>
+
+      <label class="flex cursor-pointer items-center gap-2 text-xs text-secondary">
+        <input
+          type="checkbox"
+          class="h-3.5 w-3.5 accent-[var(--accent)]"
+          :checked="modelValue.proxy !== null && modelValue.proxy !== undefined"
+          @change="
+            patch({ proxy: ($event.target as HTMLInputElement).checked ? BLANK_PROXY : null })
+          "
+        />
+        Send this request through a proxy
+      </label>
+
+      <div v-if="modelValue.proxy" class="space-y-2.5 pl-5">
+        <div>
+          <label for="proxy-url" class="mb-1 block text-xs font-medium text-secondary">
+            Proxy URL
+          </label>
+          <input
+            id="proxy-url"
+            class="input input-mono"
+            :value="modelValue.proxy.url"
+            placeholder="http://proxy.corp:8080"
+            spellcheck="false"
+            @input="patchProxy({ url: ($event.target as HTMLInputElement).value })"
+          />
+        </div>
+
+        <div class="grid gap-3 sm:grid-cols-2">
+          <div>
+            <label for="proxy-user" class="mb-1 block text-xs font-medium text-secondary">
+              Username <span class="font-normal text-muted">(optional)</span>
+            </label>
+            <input
+              id="proxy-user"
+              class="input input-mono"
+              :value="modelValue.proxy.username ?? ''"
+              autocomplete="off"
+              @input="
+                patchProxy({ username: ($event.target as HTMLInputElement).value || null })
+              "
+            />
+          </div>
+          <div>
+            <label for="proxy-password" class="mb-1 block text-xs font-medium text-secondary">
+              Password <span class="font-normal text-muted">(optional)</span>
+            </label>
+            <input
+              id="proxy-password"
+              type="password"
+              class="input input-mono"
+              :value="modelValue.proxy.password ?? ''"
+              autocomplete="off"
+              @input="
+                patchProxy({ password: ($event.target as HTMLInputElement).value || null })
+              "
+            />
+          </div>
+        </div>
+
+        <div>
+          <label for="proxy-bypass" class="mb-1 block text-xs font-medium text-secondary">
+            Bypass for <span class="font-normal text-muted">(optional)</span>
+          </label>
+          <input
+            id="proxy-bypass"
+            class="input input-mono"
+            :value="modelValue.proxy.bypass.join(', ')"
+            placeholder="localhost, 127.0.0.1, .internal"
+            spellcheck="false"
+            @input="patchProxy({ bypass: parseHosts(($event.target as HTMLInputElement).value) })"
+          />
+        </div>
+      </div>
+    </fieldset>
   </div>
 </template>

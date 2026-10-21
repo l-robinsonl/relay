@@ -369,9 +369,13 @@ pub struct ClientCertificate {
     #[serde(default)]
     pub hosts: Vec<String>,
     /// PEM file containing the certificate chain and private key.
+    ///
+    /// The key must not be encrypted: `rustls` has no way to ask for a
+    /// passphrase, so there was a `passphrase` field here that nothing
+    /// ever read. A field that silently does nothing is worse than no
+    /// field, so the engine now says plainly that the key needs
+    /// decrypting instead.
     pub pem_path: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub passphrase: Option<String>,
 }
 
 /// An outbound proxy.

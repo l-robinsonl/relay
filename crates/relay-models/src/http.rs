@@ -102,11 +102,6 @@ impl HttpRequestSpec {
         {
             proxy.password = Some(REDACTED.to_string());
         }
-        if let Some(cert) = settings.client_certificate.as_mut()
-            && cert.passphrase.is_some()
-        {
-            cert.passphrase = Some(REDACTED.to_string());
-        }
 
         Self {
             headers,
