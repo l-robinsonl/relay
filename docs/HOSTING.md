@@ -82,6 +82,35 @@ and point `RELAY_DATABASE_URL` at that role. Connecting as the owner (for
 example Neon's default `neondb_owner`) works, but RLS will not be enforced
 and you are relying on the application's own filtering alone.
 
+### Setting up a Neon database
+
+The CLI can mint its own API key, which avoids hunting for the setting in
+the console. Note that **Settings → Credentials** on a *project* issues S3
+keys for object storage and AI Gateway tokens — not a management key.
+
+```sh
+npm i -g neon@latest
+neon profile create agent --mint      # one browser sign-in, stores an API key
+```
+
+After that the CLI works unattended, either with `--profile agent` or with
+`NEON_API_KEY` in the environment.
+
+Give Relay a database of its own rather than sharing one:
+
+```sh
+export NEON_API_KEY=napi_…
+neon databases create --name relay --owner-name <owner> --project-id <id>
+```
+
+Then point `RELAY_DATABASE_URL` at it — the same connection string with
+`/relay` as the path. A Neon project often arrives with a starter template
+already in `neondb`, and sharing a database with it is avoidable work.
+
+Relay still creates its `relay` schema inside whatever database it is
+given. That is deliberate: the same migration then runs unchanged whether
+the database is Relay's alone or shared.
+
 ## Neon specifics
 
 - **Use the pooled endpoint** (`-pooler` in the hostname) for the
