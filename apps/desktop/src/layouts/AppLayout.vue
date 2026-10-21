@@ -16,6 +16,7 @@ import EmptyState from '@/components/ui/EmptyState.vue'
 import ConflictPanel from '@/features/sync/ConflictPanel.vue'
 import DialogHost from '@/components/ui/DialogHost.vue'
 import ImportDialog from '@/features/import-export/ImportDialog.vue'
+import RelayLogo from '@/components/ui/RelayLogo.vue'
 import SyncIndicator from '@/features/sync/SyncIndicator.vue'
 import SyncSettings from '@/features/sync/SyncSettings.vue'
 import RequestPanel from '@/features/request/RequestPanel.vue'
@@ -269,7 +270,7 @@ onBeforeUnmount(() => {
         <PanelLeft :size="14" />
       </button>
 
-      <span class="text-xs font-semibold tracking-tight text-secondary">Relay</span>
+      <RelayLogo :size="15" wordmark title="Relay" />
 
       <button
         type="button"
@@ -350,6 +351,9 @@ onBeforeUnmount(() => {
           title="No request open"
           description="Create a request, or press Ctrl+K to search."
         >
+          <template #icon>
+            <RelayLogo :size="34" boxed class="opacity-90" />
+          </template>
           <template #action>
             <button type="button" class="btn btn-primary text-xs" @click="tabs.openDraft()">
               New request

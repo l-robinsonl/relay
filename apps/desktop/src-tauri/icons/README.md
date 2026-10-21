@@ -1,7 +1,14 @@
 # Icons
 
-A white chevron on a rounded square in Relay's accent blue — a send arrow,
-and the shape of a shell prompt.
+Two white chevrons on a rounded square in Relay's accent blue. A double
+chevron is the universal "forward on" mark, which is what the name means
+— a single one would read as a shell prompt. The trailing chevron carries
+the weight and the leading one is smaller and thinner, so the pair reads
+as a hand-off rather than as two arrows.
+
+The same geometry is drawn in the interface by
+`apps/desktop/src/components/ui/RelayLogo.vue`, as SVG, so the icon and
+the in-app mark cannot drift apart.
 
 Generated from `icon.png` (1024×1024) by `npm run tauri icon <path>`, which
 produces every size the platforms need plus the `.icns` and `.ico` bundles

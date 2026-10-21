@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Draws Relay's application icon.
 
-A white chevron on a rounded square in the accent blue: a send arrow, and
-the shape of a shell prompt.
+Two white chevrons on a rounded square in the accent blue. A double
+chevron is the universal "forward on" mark, which is what the name means;
+a single one would just be a shell prompt. The leading chevron is lighter
+and smaller, so the pair reads as a hand-off rather than as decoration.
 
 The mark lives in code rather than as a committed binary so that changing
 it is a reviewable diff. Rendering uses 4x supersampling — without it the
@@ -64,12 +66,13 @@ def segment_distance(px, py, ax, ay, bx, by) -> float:
     return math.hypot(px - (ax + t * vx), py - (ay + t * vy))
 
 
-def chevron_distance(nx: float, ny: float) -> float:
-    """Distance to a two-stroke chevron pointing right, in unit space."""
-    tip = (0.16, 0.0)
+def chevron_distance(nx: float, ny: float, tip_x: float, height: float, reach: float) -> float:
+    """Distance to one chevron pointing right, in unit space."""
+    tip = (tip_x, 0.0)
+    back = tip_x - reach
     return min(
-        segment_distance(nx, ny, -0.15, -0.21, *tip),
-        segment_distance(nx, ny, -0.15, 0.21, *tip),
+        segment_distance(nx, ny, back, -height, *tip),
+        segment_distance(nx, ny, back, height, *tip),
     )
 
 
@@ -80,7 +83,13 @@ def render(size: int) -> bytes:
     # A 9% margin keeps the shape clear of the edge, where launchers crop.
     box_half = half * 0.91
     radius = box_half * 0.26
-    stroke = big * 0.052
+
+    # The trailing chevron carries the weight; the leading one is smaller
+    # and thinner so the eye reads direction rather than a symmetric pair.
+    # Shifted a little left of true centre: the pair's visual mass sits
+    # behind the leading tip, so geometric centring reads as right-heavy.
+    trailing = {"tip_x": -0.010, "height": 0.195, "reach": 0.195, "stroke": 0.053}
+    leading = {"tip_x": 0.200, "height": 0.143, "reach": 0.143, "stroke": 0.042}
 
     out = bytearray()
     for y in range(size):
@@ -95,7 +104,19 @@ def render(size: int) -> bytes:
                     if rounded_box_sdf(px, py, box_half, radius) > 0:
                         continue
 
-                    if chevron_distance(px / big, py / big) <= stroke / big:
+                    ux, uy = px / big, py / big
+                    on_mark = (
+                        chevron_distance(
+                            ux, uy, trailing["tip_x"], trailing["height"], trailing["reach"]
+                        )
+                        <= trailing["stroke"]
+                        or chevron_distance(
+                            ux, uy, leading["tip_x"], leading["height"], leading["reach"]
+                        )
+                        <= leading["stroke"]
+                    )
+
+                    if on_mark:
                         r += FOREGROUND[0]
                         g += FOREGROUND[1]
                         b += FOREGROUND[2]
