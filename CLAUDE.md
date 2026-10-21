@@ -99,6 +99,17 @@ Run it: `npm run tauri dev`, or the built binary at
   their parent, never queried independently, and it makes each object one
   document for revision-based conflict detection.
 - **No vue-router.** One window, tabs in Pinia.
+- **Neon Auth is for Relay Cloud sign-in, never for the API client's
+  OAuth.** Two different things share the name. The Phase 4 feature is
+  Relay acting as an OAuth *client* against whatever API the user is
+  testing — GitHub, Stripe, their own Okta — where Neon has no role.
+  Neon Auth (already provisioned: users, sessions, social accounts,
+  orgs, invitations, verification, JWKS) is a candidate for signing in
+  to Relay's *own* sync server, in Phase 6, behind an `Authenticator`
+  trait mirroring `SyncStore` — `LocalAuthenticator` for self-hosting so
+  it stays dependency-free, `NeonAuthenticator` for Cloud. Map Neon
+  identity to a Relay user and keep workspace membership ours;
+  `neon_auth.organization` is a parallel concept, not our workspaces.
 - **rusqlite pinned to 0.39.** 0.40 needs libsqlite3-sys 0.38; sqlx-sqlite
   needs <0.38; both link native sqlite3. Do not bump without checking.
 
