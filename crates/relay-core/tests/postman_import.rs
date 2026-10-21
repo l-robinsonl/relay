@@ -698,3 +698,147 @@ fn ordering_within_a_folder_is_preserved() {
         ["List users", "Create user", "Get user"]
     );
 }
+
+/// A collection using each OAuth 2.0 grant Postman can express.
+const OAUTH_COLLECTION: &str = r#"{
+  "info": {
+    "name": "OAuth API",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Authorization code",
+      "request": {
+        "method": "GET",
+        "url": "https://api.example.com/me",
+        "auth": {
+          "type": "oauth2",
+          "oauth2": [
+            { "key": "grant_type", "value": "authorization_code_with_pkce" },
+            { "key": "authUrl", "value": "https://id.example.com/authorize" },
+            { "key": "accessTokenUrl", "value": "https://id.example.com/token" },
+            { "key": "clientId", "value": "abc-123" },
+            { "key": "clientSecret", "value": "shhh" },
+            { "key": "scope", "value": "read:me" },
+            { "key": "redirect_uri", "value": "http://127.0.0.1:8723/callback" },
+            { "key": "accessToken", "value": "stale-token-from-the-file" },
+            { "key": "client_authentication", "value": "body" }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Client credentials",
+      "request": {
+        "method": "GET",
+        "url": "https://api.example.com/stats",
+        "auth": {
+          "type": "oauth2",
+          "oauth2": [
+            { "key": "grant_type", "value": "client_credentials" },
+            { "key": "accessTokenUrl", "value": "https://id.example.com/token" },
+            { "key": "clientId", "value": "svc" },
+            { "key": "clientSecret", "value": "svc-secret" },
+            { "key": "audience", "value": "https://api.example.com" }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Implicit",
+      "request": {
+        "method": "GET",
+        "url": "https://api.example.com/old",
+        "auth": {
+          "type": "oauth2",
+          "oauth2": [
+            { "key": "grant_type", "value": "implicit" },
+            { "key": "authUrl", "value": "https://id.example.com/authorize" },
+            { "key": "clientId", "value": "legacy" }
+          ]
+        }
+      }
+    }
+  ]
+}"#;
+
+fn oauth_of(report: &relay_core::import::ImportReport, name: &str) -> relay_models::OAuth2Config {
+    let request = report
+        .requests
+        .iter()
+        .find(|r| r.name == name)
+        .unwrap_or_else(|| panic!("no request named {name}"));
+
+    match &request.auth {
+        AuthConfig::OAuth2(config) => (**config).clone(),
+        other => panic!("expected OAuth2 for {name}, got {other:?}"),
+    }
+}
+
+#[test]
+fn an_oauth_authorization_code_grant_imports_its_whole_configuration() {
+    use relay_models::{ClientAuthStyle, OAuth2Grant};
+
+    let report = import_collection(OAUTH_COLLECTION, ws()).unwrap();
+    let config = oauth_of(&report, "Authorization code");
+
+    assert_eq!(config.grant, OAuth2Grant::AuthorizationCode);
+    assert_eq!(config.auth_url, "https://id.example.com/authorize");
+    assert_eq!(config.token_url, "https://id.example.com/token");
+    assert_eq!(config.client_id, "abc-123");
+    assert_eq!(config.client_secret, "shhh");
+    assert_eq!(config.scope, "read:me");
+    assert_eq!(config.redirect_uri, "http://127.0.0.1:8723/callback");
+    assert_eq!(config.client_auth, ClientAuthStyle::Body);
+    assert!(config.use_pkce);
+}
+
+#[test]
+fn a_cached_token_in_the_file_is_not_imported() {
+    // Collections get emailed around and committed to repositories. A
+    // credential inside one should not be silently adopted and then
+    // written to the local database.
+    let report = import_collection(OAUTH_COLLECTION, ws()).unwrap();
+    let config = oauth_of(&report, "Authorization code");
+
+    assert_eq!(config.access_token, None);
+    assert_eq!(config.refresh_token, None);
+
+    assert!(
+        report
+            .warnings
+            .iter()
+            .any(|w| w.message.contains("cached OAuth access token")),
+        "the user should be told why their token did not come across: {:?}",
+        report.warnings
+    );
+}
+
+#[test]
+fn a_client_credentials_grant_does_not_ask_for_pkce() {
+    use relay_models::OAuth2Grant;
+
+    let report = import_collection(OAUTH_COLLECTION, ws()).unwrap();
+    let config = oauth_of(&report, "Client credentials");
+
+    assert_eq!(config.grant, OAuth2Grant::ClientCredentials);
+    assert_eq!(config.audience, "https://api.example.com");
+    assert!(
+        !config.use_pkce,
+        "PKCE belongs to the browser grants; asking for it here would be sent and ignored"
+    );
+}
+
+#[test]
+fn the_implicit_grant_is_imported_but_flagged() {
+    let report = import_collection(OAUTH_COLLECTION, ws()).unwrap();
+
+    assert!(
+        report
+            .warnings
+            .iter()
+            .any(|w| w.message.contains("implicit grant")),
+        "{:?}",
+        report.warnings
+    );
+}

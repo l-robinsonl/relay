@@ -12,8 +12,8 @@ use relay_core::resolve::{ResolutionInput, build_context, resolve};
 use relay_http::{HttpEngine, ProgressSink};
 use relay_models::{
     Collection, CollectionId, Environment, EnvironmentId, ErrorKind, HistoryEntry, HistoryId,
-    HttpExchange, HttpRequestSpec, RelayError, RelayResult, RequestDoc, RequestId, Timestamp,
-    TreeNode, Workspace, WorkspaceId,
+    HttpExchange, HttpRequestSpec, OAuth2Config, RelayError, RelayResult, RequestDoc, RequestId,
+    Timestamp, TreeNode, Workspace, WorkspaceId,
 };
 use relay_script::{ScriptEngine, ScriptOutcome, ScriptRequest, ScriptResponse};
 use relay_storage::{
@@ -21,6 +21,7 @@ use relay_storage::{
     WorkspaceRepo, state_keys,
 };
 
+use crate::oauth::{self, TokenCache};
 use crate::secrets::SecretStore;
 use crate::sync::{
     Resolution, SyncClient, SyncEngine, SyncOutcome, WatchEvent, Watcher, initial_state,
@@ -40,6 +41,22 @@ pub struct SendOutcome {
     pub tests: Option<ScriptOutcome>,
 }
 
+/// What the Auth tab knows about a held OAuth token.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OAuthTokenStatus {
+    /// Whether a token is held for this configuration.
+    pub has_token: bool,
+    /// When it lapses, if the server said.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<Timestamp>,
+    /// What was actually granted, which may be less than was asked for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
+    /// Whether it can be renewed without the browser.
+    pub can_refresh: bool,
+}
+
 /// The result of resolving a request, as the UI sees it.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -56,6 +73,7 @@ pub struct RelayService {
     db: Database,
     engine: HttpEngine,
     secrets: Arc<dyn SecretStore>,
+    tokens: Arc<TokenCache>,
 }
 
 impl std::fmt::Debug for RelayService {
@@ -63,6 +81,7 @@ impl std::fmt::Debug for RelayService {
         f.debug_struct("RelayService")
             .field("db", &self.db)
             .field("secrets", &self.secrets.backend_name())
+            .field("tokens", &self.tokens)
             .finish()
     }
 }
@@ -74,6 +93,7 @@ impl RelayService {
             db,
             engine,
             secrets,
+            tokens: Arc::new(TokenCache::new()),
         }
     }
 
@@ -338,6 +358,73 @@ impl RelayService {
         })
     }
 
+    /// What the UI shows about a request's OAuth token.
+    ///
+    /// Carries no token value. The Auth tab needs to say whether a token
+    /// is held and when it lapses; it has no reason to display the
+    /// credential itself, and putting one in an IPC payload would spread
+    /// it into places that are harder to account for.
+    pub fn oauth_token_status(&self, config: &OAuth2Config) -> OAuthTokenStatus {
+        match self.tokens.get(config) {
+            None => OAuthTokenStatus::default(),
+            Some(token) => OAuthTokenStatus {
+                has_token: true,
+                expires_at: token.expires_at,
+                scope: token.scope,
+                can_refresh: token
+                    .refresh_token
+                    .as_deref()
+                    .is_some_and(|t| !t.trim().is_empty()),
+            },
+        }
+    }
+
+    /// Obtains a token without a browser, for the grants that allow it.
+    ///
+    /// Returns the status rather than the token, for the reason above.
+    pub async fn oauth_fetch_token(&self, config: OAuth2Config) -> RelayResult<OAuthTokenStatus> {
+        let mut config = config;
+        // An expired or stale token on the config would otherwise be
+        // taken as good: pressing this button means "get me a new one".
+        config.access_token = None;
+        config.expires_at = None;
+        self.tokens.forget(&config);
+
+        oauth::ensure_token(&self.tokens, &mut config).await?;
+        Ok(self.oauth_token_status(&config))
+    }
+
+    /// Runs the authorization code flow, opening a browser via `open`.
+    ///
+    /// The caller supplies the opening because only the desktop layer
+    /// knows how; the listener is already bound before `open` is called,
+    /// so a browser that responds instantly cannot arrive too early.
+    pub async fn oauth_authorize<F>(
+        &self,
+        config: OAuth2Config,
+        open: F,
+    ) -> RelayResult<OAuthTokenStatus>
+    where
+        F: FnOnce(&str) -> RelayResult<()>,
+    {
+        let flow = oauth::begin_authorization(&config)?.start().await?;
+
+        open(&flow.url)?;
+
+        let config = flow.complete(&self.tokens).await?;
+        Ok(self.oauth_token_status(&config))
+    }
+
+    /// Discards the token held for a configuration.
+    pub fn oauth_forget_token(&self, config: &OAuth2Config) {
+        self.tokens.forget(config);
+    }
+
+    /// Discards every held token.
+    pub fn oauth_forget_all_tokens(&self) {
+        self.tokens.forget_all();
+    }
+
     /// Resolves and sends a request, recording it in history.
     pub async fn request_send(
         &self,
@@ -382,7 +469,14 @@ impl RelayService {
             ));
         }
 
-        let spec = resolution.spec;
+        let mut spec = resolution.spec;
+
+        // The token goes onto the spec that is about to be sent, never
+        // onto the stored document: `spec` is a resolution of `doc` and
+        // is dropped when this call returns, so no access token can
+        // reach SQLite, an export or a sync payload.
+        oauth::prepare_auth(&self.tokens, &mut spec.auth).await?;
+
         let exchange = self.engine.send(execution_id, spec.clone(), progress).await;
 
         self.record_history(&doc, &spec, &exchange).await;

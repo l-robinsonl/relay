@@ -9,4 +9,4 @@ import type { OAuth2Config } from "./OAuth2Config";
  * a request is in flight. Persisted requests reference a variable instead, so
  * that the secret lives in the OS keyring and never reaches sync or exports.
  */
-export type AuthConfig = { "type": "none" } | { "type": "inherit" } | { "type": "basic", username: string, password: string, } | { "type": "bearer", token: string, } | { "type": "apiKey", key: string, value: string, in: ApiKeyLocation, } | { "type": "oAuth2" } & OAuth2Config;
+export type AuthConfig = { "type": "none" } | { "type": "inherit" } | { "type": "basic", username: string, password: string, } | { "type": "bearer", token: string, } | { "type": "apiKey", key: string, value: string, in: ApiKeyLocation, } | { "type": "oauth2" } & OAuth2Config;

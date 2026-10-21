@@ -10,14 +10,14 @@
 
 use std::sync::Arc;
 
-use relay_app::service::{ConflictView, SendOutcome, SyncStatus};
+use relay_app::service::{ConflictView, OAuthTokenStatus, SendOutcome, SyncStatus};
 use relay_app::sync::{ServerHealth, SyncOutcome};
 use relay_app::{RelayService, ResolvedPreview};
 use relay_core::import::ImportReport;
 use relay_models::{
     Collection, CollectionId, Environment, EnvironmentId, ExecutionId, ExecutionProgress,
-    HistoryEntry, HttpExchange, RelayError, RelayResult, RequestDoc, RequestId, TreeNode,
-    Workspace, WorkspaceId,
+    HistoryEntry, HttpExchange, OAuth2Config, RelayError, RelayResult, RequestDoc, RequestId,
+    TreeNode, Workspace, WorkspaceId,
 };
 use tauri::{Emitter, State};
 
@@ -610,4 +610,59 @@ pub async fn database_backup(
         .await
         .map_err(|e| RelayError::internal(e.to_string()))?
         .map_err(Into::into)
+}
+
+/// What the Auth tab knows about a held OAuth token.
+#[tauri::command]
+pub fn oauth_token_status(
+    service: State<'_, RelayService>,
+    config: OAuth2Config,
+) -> OAuthTokenStatus {
+    service.oauth_token_status(&config)
+}
+
+/// Fetches a token for the grants that need no browser.
+#[tauri::command]
+pub async fn oauth_fetch_token(
+    service: State<'_, RelayService>,
+    config: OAuth2Config,
+) -> RelayResult<OAuthTokenStatus> {
+    service.oauth_fetch_token(config).await
+}
+
+/// Runs the authorization code flow, opening the user's browser.
+///
+/// The browser is deliberately the real one rather than a webview: a
+/// webview would not have the user's existing session with the identity
+/// provider, would not show the address bar they need to check before
+/// typing a password, and could in principle read what they typed.
+#[tauri::command]
+pub async fn oauth_authorize(
+    app: tauri::AppHandle,
+    service: State<'_, RelayService>,
+    config: OAuth2Config,
+) -> RelayResult<OAuthTokenStatus> {
+    service
+        .oauth_authorize(config, move |url| {
+            use tauri_plugin_opener::OpenerExt;
+            app.opener().open_url(url, None::<&str>).map_err(|e| {
+                RelayError::new(
+                    relay_models::ErrorKind::Io,
+                    format!("could not open your browser: {e}"),
+                )
+            })
+        })
+        .await
+}
+
+/// Discards the token held for one configuration.
+#[tauri::command]
+pub fn oauth_forget_token(service: State<'_, RelayService>, config: OAuth2Config) {
+    service.oauth_forget_token(&config);
+}
+
+/// Discards every held token.
+#[tauri::command]
+pub fn oauth_forget_all_tokens(service: State<'_, RelayService>) {
+    service.oauth_forget_all_tokens();
 }

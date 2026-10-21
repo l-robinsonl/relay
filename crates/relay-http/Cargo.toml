@@ -21,6 +21,9 @@ mime_guess.workspace = true
 tracing.workspace = true
 thiserror.workspace = true
 encoding_rs = "0.8.42"
+sha2 = "0.11"
+getrandom = "0.3"
+percent-encoding.workspace = true
 
 [dependencies.reqwest]
 version = "0.13"
@@ -33,6 +36,7 @@ features = [
     "deflate",
     "zstd",
     "multipart",
+    "form",
     "stream",
     "charset",
     "http2",

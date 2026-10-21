@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import type { AuthConfig } from '@relay/shared-types'
+import type { AuthConfig, OAuth2Config } from '@relay/shared-types'
+import OAuth2Editor from './OAuth2Editor.vue'
 
 const props = defineProps<{ modelValue: AuthConfig }>()
 const emit = defineEmits<{ 'update:modelValue': [AuthConfig] }>()
@@ -11,6 +12,7 @@ const TYPES = [
   { id: 'basic', label: 'Basic' },
   { id: 'bearer', label: 'Bearer token' },
   { id: 'apiKey', label: 'API key' },
+  { id: 'oauth2', label: 'OAuth 2.0' },
 ] as const
 
 type AuthType = (typeof TYPES)[number]['id']
@@ -38,7 +40,39 @@ function setType (next: AuthType) {
     case 'apiKey':
       emit('update:modelValue', { type: 'apiKey', key: '', value: '', in: 'header' })
       break
+    case 'oauth2':
+      emit('update:modelValue', { type: 'oauth2', ...BLANK_OAUTH })
+      break
   }
+}
+
+/** A new OAuth block. PKCE starts on, as it should stay. */
+const BLANK_OAUTH: OAuth2Config = {
+  grant: 'authorizationCode',
+  authUrl: '',
+  tokenUrl: '',
+  clientId: '',
+  clientSecret: '',
+  scope: '',
+  audience: '',
+  redirectUri: '',
+  username: '',
+  password: '',
+  usePkce: true,
+  clientAuth: 'header',
+}
+
+/** The OAuth block, flattened out of the tagged union for the child.
+ *  The discriminator is stripped so what reaches the IPC layer is an
+ *  `OAuth2Config` and nothing else. */
+const oauth = computed<OAuth2Config>(() => {
+  if (props.modelValue.type !== 'oauth2') return BLANK_OAUTH
+  const { type: _tag, ...config } = props.modelValue
+  return config
+})
+
+function setOAuth (next: OAuth2Config) {
+  emit('update:modelValue', { type: 'oauth2', ...next })
 }
 </script>
 
@@ -127,6 +161,12 @@ function setType (next: AuthType) {
         database.
       </p>
     </div>
+
+    <OAuth2Editor
+      v-else-if="modelValue.type === 'oauth2'"
+      :model-value="oauth"
+      @update:model-value="setOAuth"
+    />
 
     <div v-else-if="modelValue.type === 'apiKey'" class="grid max-w-xl gap-3 sm:grid-cols-3">
       <div>

@@ -3442,8 +3442,10 @@ name = "relay-app"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "base64 0.23.1",
  "dirs",
  "futures-util",
+ "getrandom 0.3.4",
  "relay-core",
  "relay-http",
  "relay-models",
@@ -3455,9 +3457,11 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
  "tokio",
  "tokio-tungstenite 0.28.0",
  "tracing",
+ "url",
  "uuid",
 ]
 
@@ -3505,11 +3509,14 @@ dependencies = [
  "bytes",
  "encoding_rs",
  "futures-util",
+ "getrandom 0.3.4",
  "mime_guess",
+ "percent-encoding",
  "relay-models",
  "reqwest",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
  "thiserror 2.0.21",
  "tokio",
  "tokio-stream",

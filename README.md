@@ -64,8 +64,8 @@ npm run tauri dev
 
 **HTTP engine** — GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS and arbitrary
 custom methods. JSON, text, XML, form-urlencoded, multipart, GraphQL and raw
-binary bodies, with file uploads streamed from disk. Basic, bearer and API-key
-auth. Per-request timeouts, redirect policy, proxies, client certificates, a
+binary bodies, with file uploads streamed from disk. Basic, bearer, API-key
+and OAuth 2.0 auth. Per-request timeouts, redirect policy, proxies, client certificates, a
 shared cookie jar, and automatic gzip/brotli/deflate/zstd decoding. Real
 cancellation that closes the connection. Responses are bounded and spool to
 disk instead of filling memory.
@@ -82,6 +82,13 @@ rather than hanging.
 **Secrets** — environment variables can be marked secret. The name is stored;
 the value goes to a credential store and is injected only for the moment a
 request is sent.
+
+**OAuth 2.0** — the authorization code grant with PKCE, signing in through
+your real browser rather than an embedded one, plus client credentials and
+the password grant. Tokens refresh themselves before they lapse and are
+held in memory only: they are never written to the database, put in an
+export, or sent to a sync server, so a request can be shared without
+sharing your access.
 
 **Import and export** — bring in an OpenAPI 3 document (JSON or YAML), a
 Postman v2.1 collection or environment, paste a `curl` command, or restore
@@ -112,13 +119,14 @@ the strength of a timestamp. Secret values never leave your device.
 
 Stated plainly, because a README that implies otherwise wastes your time:
 
-- **Synchronisation and the server.** Designed in detail, schema in place
-  (revisions, tombstones, an outbox table), but no server exists yet.
 - **Relay Cloud and billing.** Designed, not built.
 - **Pre-request scripts.** The field is stored and imported, but only
   post-response scripts run.
-- **OAuth 2.0 flows.** The configuration round-trips; the flows do not run.
-  A Postman OAuth 2.0 block imports as a bearer token.
+- **Client certificates.** The engine presents them; there is no settings
+  screen to configure one yet.
+- **The OAuth 2.0 implicit grant.** Deliberately not implemented: it
+  returns tokens in a URL fragment and issues no refresh token. Use the
+  authorization code grant with PKCE, which Relay supports.
 - **Digest, NTLM, AWS and Hawk auth.** Reported on import, not supported.
 
 ## Roadmap
@@ -128,7 +136,7 @@ Stated plainly, because a README that implies otherwise wastes your time:
 | 1 | Desktop shell, HTTP engine, SQLite persistence, save and reopen | **Done** |
 | 2 | Collections, environments, interpolation, auth, history, import/export | **Done** |
 | 3 | Self-hosted Axum sync server, users, revisions, WebSockets, conflicts | **Done** |
-| 4 | OAuth 2.0 flows, certificates | In progress — OpenAPI import and scripting done |
+| 4 | OAuth 2.0 flows, certificates | In progress — OAuth, OpenAPI import and scripting done; no certificate UI |
 | 5 | Installers, signing, CI, benchmarks, security review | In progress — installers build, signing and CI unrun |
 | 6 | Relay Cloud on Neon Postgres, multitenant, RLS | Designed |
 | 7 | Stripe billing, per-seat annual subscriptions, entitlements | Designed |

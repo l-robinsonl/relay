@@ -209,7 +209,57 @@ credentials are excluded from the sync payload by construction, not by filter.
 **Authorisation.** Every read and write is authorised against workspace
 membership on the server. Knowing an object id grants nothing.
 
-## 6. Phased plan
+## 6. OAuth 2.0
+
+Relay acts as an OAuth *client* against whatever API the user is testing.
+This is unrelated to signing in to a Relay sync server.
+
+| Grant | How |
+|---|---|
+| Authorization code | PKCE (S256) by default, through the system browser |
+| Client credentials | Direct to the token endpoint |
+| Password | Direct, for providers that offer nothing else |
+| Implicit | Deliberately absent — see below |
+
+The authorization code grant binds a listener on `127.0.0.1` *before*
+opening the browser, so a provider that redirects instantly cannot arrive
+before anything is listening. RFC 8252 §7.3 prefers loopback to a custom
+URI scheme, which any other program on the machine could claim. The
+listener accepts one callback and shuts down; it checks the `state` it
+issued before it will exchange a code, ignores unrelated requests such as
+`/favicon.ico`, escapes the provider's `error_description` into the page
+it shows, and gives up after five minutes.
+
+The browser is the user's real one, not an embedded webview: a webview
+would not carry their existing session with the identity provider, would
+not show the address bar they need in order to check what they are typing
+a password into, and could in principle read it.
+
+**Tokens are never persisted.** They live in a process-lifetime cache
+keyed by a SHA-256 digest of the flow's identity — grant, endpoints,
+client id and secret, scope, audience, username. The client secret is in
+the digest so that rotating it does not keep serving the token issued
+under the old one. A token is applied to the resolved request spec at
+send time and never written back to the `RequestDoc`, which is what keeps
+it out of SQLite, exports and the sync payload. The cost is that tokens
+are lost on restart; client credentials re-fetch silently, and an
+authorization code grant usually has a refresh token to trade in.
+
+A send refreshes a token that is within sixty seconds of expiry rather
+than letting it lapse mid-flight and return a confusing 401. If a refresh
+token is rejected, grants that can start again without a browser do so;
+the authorization code grant asks the user to authorize again.
+
+The implicit grant is not implemented. It returns tokens in a URL
+fragment, where they reach browser history and server logs, and it issues
+no refresh token. A Postman collection that uses it imports with a
+warning pointing at the authorization code grant.
+
+A cached access token inside an imported Postman collection is dropped,
+not adopted: collection files get emailed around, and a credential in one
+should not silently become a credential Relay stores.
+
+## 7. Phased plan
 
 | Phase | Scope | Exit criteria |
 |---|---|---|
@@ -254,7 +304,7 @@ costs a user nothing, and the only part whose premature arrival would shape the
 sync protocol around a payment model rather than the other way round.
 
 
-## 7. Deployment modes
+## 8. Deployment modes
 
 The same server binary and the same `/v1` sync API serve all three modes. What
 changes is the storage driver and whether billing is compiled in.
@@ -356,7 +406,7 @@ workspace never moves its secrets.** A teammate joining a shared workspace gets
 the shape of the environment and must fill in their own credentials. This is
 the behaviour that makes it safe to share a Production environment at all.
 
-## 8. Billing architecture (Phase 7)
+## 9. Billing architecture (Phase 7)
 
 - **Stripe Checkout** for subscription creation, **Billing Portal** for
   self-service changes. Relay never handles card data and stores no PAN.

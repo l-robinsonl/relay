@@ -29,11 +29,11 @@ Phases 1–3 complete. Phase 4 mostly. Phase 5 part-done.
 | Export | portable JSON, copy as cURL |
 | Sync | Axum server, users, membership, revisions, conflicts, WebSocket live updates, client engine |
 | Scripting | QuickJS sandbox, assertions, test results panel |
+| OAuth 2.0 | authorization code + PKCE via loopback, client credentials, password; in-memory token cache, silent refresh |
 | Packaging | `.deb` / `.rpm` / `.AppImage` build |
 
 | Not built | |
 |---|---|
-| OAuth 2.0 flows | config round-trips; flows do not run |
 | Pre-request scripts | stored and imported; never executed |
 | Client certificate UI | engine supports it, no settings screen |
 | Relay Cloud / billing | designed only (Phases 6–7) |
@@ -181,10 +181,18 @@ Quote PSS. Never quote a figure this project did not measure.
 
 ## Next
 
-1. OAuth 2.0 flows — client credentials first, then authorization code
-   with a loopback redirect.
-2. Pre-request scripts — the runtime exists, nothing calls it before send.
-3. Client certificate settings UI.
-4. CI — written at `.github/workflows/ci.yml`, never run.
-5. Phase 6/7 — Relay Cloud on Neon, then Stripe. Billing last, by the
+1. Pre-request scripts — the runtime exists, nothing calls it before send.
+2. Client certificate settings UI.
+3. CI — written at `.github/workflows/ci.yml`, never run.
+4. Phase 6/7 — Relay Cloud on Neon, then Stripe. Billing last, by the
    user's own sequencing.
+
+**OAuth, as built.** `relay-http/src/oauth.rs` does the protocol,
+`oauth_redirect.rs` is the one-shot loopback listener, and
+`relay-app/src/oauth.rs` holds `TokenCache` — in memory, keyed by a
+SHA-256 digest of the flow's identity *including the client secret*, so
+rotating a secret does not keep serving the old token. Tokens are put on
+the resolved spec inside `request_send` and never on the `RequestDoc`,
+which is what keeps them out of SQLite, exports and sync. The browser is
+opened by a closure the desktop layer passes in, so the flow is testable
+without a window.

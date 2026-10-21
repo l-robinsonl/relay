@@ -26,6 +26,10 @@ pub enum EngineError {
     #[error("request body: {0}")]
     RequestBody(String),
 
+    /// An OAuth 2.0 flow could not be completed.
+    #[error("{0}")]
+    OAuth(String),
+
     /// A header name or value was not valid.
     #[error("invalid header {name}: {reason}")]
     InvalidHeader {
@@ -65,6 +69,7 @@ impl EngineError {
                 (TransportErrorKind::TlsError, Some(d.clone()))
             }
             Self::RequestBody(d) => (TransportErrorKind::RequestBodyError, Some(d.clone())),
+            Self::OAuth(d) => (TransportErrorKind::RequestBodyError, Some(d.clone())),
             Self::InvalidHeader { reason, .. } => {
                 (TransportErrorKind::RequestBodyError, Some(reason.clone()))
             }

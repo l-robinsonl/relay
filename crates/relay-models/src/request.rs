@@ -270,14 +270,9 @@ pub enum AuthConfig {
     #[default]
     Inherit,
     #[serde(rename_all = "camelCase")]
-    Basic {
-        username: String,
-        password: String,
-    },
+    Basic { username: String, password: String },
     #[serde(rename_all = "camelCase")]
-    Bearer {
-        token: String,
-    },
+    Bearer { token: String },
     #[serde(rename_all = "camelCase")]
     ApiKey {
         key: String,
@@ -285,6 +280,10 @@ pub enum AuthConfig {
         #[serde(rename = "in")]
         location: ApiKeyLocation,
     },
+    /// Named explicitly: serde's camelCase would spell this `oAuth2`,
+    /// which is how nobody writes it. The tag reaches the database,
+    /// exports and the sync wire, so it is worth getting right.
+    #[serde(rename = "oauth2")]
     OAuth2(Box<OAuth2Config>),
 }
 

@@ -310,6 +310,7 @@ fn collect_required_secrets(doc: &RequestDoc, context: &VariableContext) -> Vec<
         AuthConfig::OAuth2(config) => {
             sources.push(config.client_id.clone());
             sources.push(config.client_secret.clone());
+            sources.push(config.username.clone());
             sources.push(config.password.clone());
         }
         _ => {}

@@ -8,11 +8,13 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod oauth;
 pub mod paths;
 pub mod secrets;
 pub mod service;
 pub mod sync;
 
+pub use oauth::{TokenCache, TokenSource};
 pub use secrets::{MemorySecretStore, SecretStore};
 pub use service::{RelayService, ResolvedPreview};
 pub use sync::{Resolution, SyncClient, SyncEngine, SyncOutcome};

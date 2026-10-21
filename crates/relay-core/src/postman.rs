@@ -11,8 +11,9 @@
 //! survive import untouched.
 
 use relay_models::{
-    ApiKeyLocation, AuthConfig, Collection, CollectionId, Environment, FormField, FormValue,
-    HttpMethod, KeyValue, RequestBody, RequestDoc, RequestScripts, Variable, WorkspaceId,
+    ApiKeyLocation, AuthConfig, ClientAuthStyle, Collection, CollectionId, Environment, FormField,
+    FormValue, HttpMethod, KeyValue, OAuth2Config, OAuth2Grant, RequestBody, RequestDoc,
+    RequestScripts, Variable, WorkspaceId,
 };
 use serde_json::Value;
 
@@ -557,15 +558,73 @@ fn convert_auth(auth: &Value, path: &str, report: &mut ImportReport) -> AuthConf
             }
         }
         "oauth2" => {
-            // The access token, if Postman saved one, is all that can be used
-            // immediately; the flow configuration does not map cleanly.
-            let token = param(auth, "oauth2", "accessToken");
-            report.warn(
-                path,
-                "OAuth 2.0 was imported as a bearer token only. Relay does not run OAuth \
-                 flows yet, so re-enter the grant configuration once it does.",
+            let postman_grant = param(auth, "oauth2", "grant_type");
+            let grant = match postman_grant.as_str() {
+                "client_credentials" => OAuth2Grant::ClientCredentials,
+                "password_credentials" => OAuth2Grant::Password,
+                "implicit" => OAuth2Grant::Implicit,
+                // Postman distinguishes authorization_code from
+                // authorization_code_with_pkce; Relay has one grant with a
+                // PKCE switch, which defaults on.
+                _ => OAuth2Grant::AuthorizationCode,
+            };
+
+            if grant == OAuth2Grant::Implicit {
+                report.warn(
+                    path,
+                    "This request uses the OAuth 2.0 implicit grant, which Relay does not \
+                     run: it returns tokens in a URL fragment and issues no refresh token. \
+                     Switch it to the authorization code grant, which Relay supports with \
+                     PKCE.",
+                );
+            }
+
+            // Whatever token Postman had cached is deliberately dropped. It
+            // has probably expired, Relay can obtain a fresh one from the
+            // configuration below, and a collection file is a thing people
+            // email around — a credential inside one should not be quietly
+            // adopted and then written to the database.
+            if !param(auth, "oauth2", "accessToken").is_empty() {
+                report.warn(
+                    path,
+                    "A cached OAuth access token in the file was not imported. Use \
+                     Get token in the Auth tab to obtain a fresh one.",
+                );
+            }
+
+            let client_auth =
+                if param(auth, "oauth2", "client_authentication").eq_ignore_ascii_case("body") {
+                    ClientAuthStyle::Body
+                } else {
+                    ClientAuthStyle::Header
+                };
+
+            // Postman only sets challengeAlgorithm on its PKCE variant, so
+            // its absence says nothing. Default to on, as Relay does
+            // everywhere else, and turn it off only where Postman named a
+            // grant that excludes it.
+            let use_pkce = !matches!(
+                grant,
+                OAuth2Grant::ClientCredentials | OAuth2Grant::Password | OAuth2Grant::Implicit
             );
-            AuthConfig::Bearer { token }
+
+            AuthConfig::OAuth2(Box::new(OAuth2Config {
+                grant,
+                auth_url: param(auth, "oauth2", "authUrl"),
+                token_url: param(auth, "oauth2", "accessTokenUrl"),
+                client_id: param(auth, "oauth2", "clientId"),
+                client_secret: param(auth, "oauth2", "clientSecret"),
+                scope: param(auth, "oauth2", "scope"),
+                audience: param(auth, "oauth2", "audience"),
+                redirect_uri: param(auth, "oauth2", "redirect_uri"),
+                username: param(auth, "oauth2", "username"),
+                password: param(auth, "oauth2", "password"),
+                use_pkce,
+                client_auth,
+                access_token: None,
+                refresh_token: None,
+                expires_at: None,
+            }))
         }
         other => {
             report.warn(

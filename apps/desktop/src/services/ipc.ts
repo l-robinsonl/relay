@@ -7,6 +7,7 @@ import type {
   HistoryEntry,
   HttpExchange,
   ImportReport,
+  OAuth2Config,
   RelayError,
   RequestDoc,
   TreeNode,
@@ -90,6 +91,19 @@ export interface ScriptOutcome {
   variables: Record<string, string>
   error?: string | null
   durationMs: number
+}
+
+/**
+ * What the Auth tab knows about a held OAuth token.
+ *
+ * Carries no token value: the interface needs to say whether one is held
+ * and when it lapses, and has no reason to hold the credential itself.
+ */
+export interface OAuthTokenStatus {
+  hasToken: boolean
+  expiresAt?: number | null
+  scope?: string | null
+  canRefresh: boolean
 }
 
 /** An exchange together with whatever its tests reported. */
@@ -182,6 +196,17 @@ export const api = {
     }),
   httpCancel: (executionId: string) => call<boolean>('http_cancel', { executionId }),
   cookiesClear: () => call<void>('cookies_clear'),
+
+  // --- OAuth 2.0 -----------------------------------------------------------
+  oauthTokenStatus: (config: OAuth2Config) =>
+    call<OAuthTokenStatus>('oauth_token_status', { config }),
+  oauthFetchToken: (config: OAuth2Config) =>
+    call<OAuthTokenStatus>('oauth_fetch_token', { config }),
+  oauthAuthorize: (config: OAuth2Config) =>
+    call<OAuthTokenStatus>('oauth_authorize', { config }),
+  oauthForgetToken: (config: OAuth2Config) =>
+    call<void>('oauth_forget_token', { config }),
+  oauthForgetAllTokens: () => call<void>('oauth_forget_all_tokens'),
 
   // --- environments and secrets --------------------------------------------
   environmentList: (workspaceId: string) =>
