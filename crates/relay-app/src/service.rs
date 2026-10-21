@@ -6,6 +6,8 @@
 
 use std::sync::Arc;
 
+use relay_core::import::ImportReport;
+use relay_core::portable::WorkspaceExport;
 use relay_core::resolve::{ResolutionInput, build_context, resolve};
 use relay_http::{HttpEngine, ProgressSink};
 use relay_models::{
@@ -525,6 +527,137 @@ impl RelayService {
     /// The document is returned unsaved so the user can review it first.
     pub fn import_curl(&self, command: &str, workspace: WorkspaceId) -> RelayResult<RequestDoc> {
         Ok(relay_core::import_curl(command, workspace)?)
+    }
+
+    /// Parses a Postman collection or environment without saving anything.
+    ///
+    /// The caller shows the report, including everything that could not be
+    /// brought across, and only calls [`Self::import_apply`] if the user
+    /// accepts it. Importing 200 requests and finding out afterwards that
+    /// the auth did not survive is the failure mode this avoids.
+    pub fn import_postman(&self, json: &str, workspace: WorkspaceId) -> RelayResult<ImportReport> {
+        Ok(relay_core::postman::import_any(json, workspace)?)
+    }
+
+    /// Parses a Relay workspace export without saving anything.
+    pub fn import_relay(&self, json: &str, workspace: WorkspaceId) -> RelayResult<ImportReport> {
+        Ok(WorkspaceExport::from_json(json)?.into_report(&workspace))
+    }
+
+    /// Reads a file of either kind, choosing the importer by its content.
+    pub fn import_detect(&self, json: &str, workspace: WorkspaceId) -> RelayResult<ImportReport> {
+        // A Relay export is self-identifying, so try it first and fall back.
+        match WorkspaceExport::from_json(json) {
+            Ok(export) => Ok(export.into_report(&workspace)),
+            Err(_) => Ok(relay_core::postman::import_any(json, workspace)?),
+        }
+    }
+
+    /// Writes an accepted import to the database.
+    ///
+    /// Everything lands in one transaction: a half-applied import would leave
+    /// folders with no requests and no obvious way to tell what was missing.
+    pub async fn import_apply(&self, report: ImportReport) -> RelayResult<usize> {
+        let count = report.object_count();
+
+        self.db
+            .call_transaction(move |tx| {
+                // Collections first, and parents before children, so a
+                // foreign key never points at a row that is not there yet.
+                for collection in &report.collections {
+                    CollectionRepo::save(tx, collection)?;
+                }
+                for request in &report.requests {
+                    RequestRepo::save(tx, request)?;
+                }
+                for environment in &report.environments {
+                    EnvironmentRepo::save(tx, environment)?;
+                }
+                Ok(())
+            })
+            .await?;
+
+        Ok(count)
+    }
+
+    /// Largest import file Relay will read.
+    ///
+    /// A Postman collection with thousands of requests is a few megabytes;
+    /// anything past this is a mistake or an attempt to exhaust memory.
+    pub const MAX_IMPORT_BYTES: u64 = 64 * 1024 * 1024;
+
+    /// Reads an import file from disk and previews it.
+    ///
+    /// The file is parsed and summarised; its contents are never returned to
+    /// the caller, so this cannot be used to read an arbitrary file.
+    pub async fn import_preview_path(
+        &self,
+        path: String,
+        workspace: WorkspaceId,
+    ) -> RelayResult<ImportReport> {
+        let metadata = tokio::fs::metadata(&path).await.map_err(|e| {
+            RelayError::new(ErrorKind::Io, format!("could not open that file: {e}"))
+        })?;
+
+        if !metadata.is_file() {
+            return Err(RelayError::new(
+                ErrorKind::Invalid,
+                "that is a directory, not a file",
+            ));
+        }
+        if metadata.len() > Self::MAX_IMPORT_BYTES {
+            return Err(RelayError::new(
+                ErrorKind::Invalid,
+                format!(
+                    "that file is {} MB, larger than the {} MB import limit",
+                    metadata.len() / 1_048_576,
+                    Self::MAX_IMPORT_BYTES / 1_048_576
+                ),
+            ));
+        }
+
+        let content = tokio::fs::read_to_string(&path).await.map_err(|e| {
+            RelayError::new(
+                ErrorKind::Io,
+                format!("could not read that file as text: {e}"),
+            )
+        })?;
+
+        self.import_detect(&content, workspace)
+    }
+
+    /// Writes a workspace export to a file the user chose.
+    pub async fn export_workspace_to_path(
+        &self,
+        workspace_id: WorkspaceId,
+        path: String,
+    ) -> RelayResult<()> {
+        let json = self.export_workspace(workspace_id).await?;
+        tokio::fs::write(&path, json)
+            .await
+            .map_err(|e| RelayError::new(ErrorKind::Io, format!("could not write that file: {e}")))
+    }
+
+    /// Builds a portable export of an entire workspace.
+    pub async fn export_workspace(&self, workspace_id: WorkspaceId) -> RelayResult<String> {
+        let workspace = {
+            let id = workspace_id.clone();
+            self.db.call(move |c| WorkspaceRepo::get(c, &id)).await?
+        };
+        let collections = {
+            let id = workspace_id.clone();
+            self.db.call(move |c| CollectionRepo::list(c, &id)).await?
+        };
+        let requests = {
+            let id = workspace_id.clone();
+            self.db.call(move |c| RequestRepo::list(c, &id)).await?
+        };
+        let environments = self
+            .db
+            .call(move |c| EnvironmentRepo::list(c, &workspace_id))
+            .await?;
+
+        Ok(WorkspaceExport::build(&workspace, &collections, &requests, &environments).to_json()?)
     }
 
     /// Renders a request as a cURL command.

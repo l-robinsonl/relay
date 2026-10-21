@@ -13,5 +13,6 @@ serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+ts-rs.workspace = true
 url.workspace = true
 percent-encoding.workspace = true

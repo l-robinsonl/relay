@@ -15,6 +15,7 @@ import { api } from '@/services/ipc'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import MethodBadge from '@/components/ui/MethodBadge.vue'
 import SidebarTree from '@/features/workspace/SidebarTree.vue'
+import { useDragDrop } from '@/composables/useDragDrop'
 import EnvironmentList from '@/features/environment/EnvironmentList.vue'
 import HistoryList from '@/features/history/HistoryList.vue'
 import type { SidebarView } from '@/types/ui'
@@ -24,6 +25,7 @@ import { useWorkspaceStore } from '@/stores/workspace'
 const workspace = useWorkspaceStore()
 const tabs = useTabsStore()
 
+const drag = useDragDrop()
 const view = ref<SidebarView>('collections')
 const search = ref('')
 const workspaceMenuOpen = ref(false)
@@ -229,8 +231,13 @@ async function handleContextMenu (node: TreeNode) {
             v-if="workspace.tree.length"
             :parent-id="null"
             :selected-request-id="selectedRequestId"
+            :drag="drag.state.value"
             @open-request="tabs.openRequest"
             @context-menu="handleContextMenu"
+            @drag-start="drag.start"
+            @drag-over="drag.over"
+            @drag-end="drag.clear"
+            @move="workspace.moveNode"
           />
           <EmptyState
             v-else

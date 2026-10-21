@@ -13,6 +13,7 @@ import type { UnlistenFn } from '@tauri-apps/api/event'
 import AppSidebar from '@/features/workspace/AppSidebar.vue'
 import CommandPalette, { type Command } from '@/features/command-palette/CommandPalette.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import ImportDialog from '@/features/import-export/ImportDialog.vue'
 import RequestPanel from '@/features/request/RequestPanel.vue'
 import ResponsePanel from '@/features/response/ResponsePanel.vue'
 import SplitPane from '@/components/ui/SplitPane.vue'
@@ -31,6 +32,7 @@ const settings = useSettingsStore()
 const toasts = useToastStore()
 
 const paletteOpen = ref(false)
+const importOpen = ref(false)
 let unlistenProgress: UnlistenFn | undefined
 
 /** Pastes a cURL command from the clipboard into a new tab. */
@@ -63,6 +65,24 @@ async function copyAsCurl () {
     toasts.success('Copied as cURL')
   } catch (error) {
     toasts.error('Could not build the cURL command', error)
+  }
+}
+
+/** Writes the whole workspace to a file the user chooses. */
+async function exportWorkspace () {
+  if (!workspace.current) return
+  try {
+    const { save } = await import('@tauri-apps/plugin-dialog')
+    const path = await save({
+      defaultPath: `${workspace.current.name.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}.relay.json`,
+      filters: [{ name: 'Relay workspace export', extensions: ['json'] }],
+    })
+    if (!path) return
+
+    await api.exportWorkspaceToPath(workspace.current.id, path)
+    toasts.success('Workspace exported', 'Secret values were not included.')
+  } catch (error) {
+    toasts.error('Could not export the workspace', error)
   }
 }
 
@@ -124,6 +144,22 @@ const shortcuts = computed<Shortcut[]>(() => [
     allowInInput: true,
     description: 'Copy the request as cURL',
     handler: copyAsCurl,
+  },
+  {
+    key: 'i',
+    mod: true,
+    shift: true,
+    allowInInput: true,
+    description: 'Import a collection or workspace',
+    handler: () => (importOpen.value = true),
+  },
+  {
+    key: 'e',
+    mod: true,
+    shift: true,
+    allowInInput: true,
+    description: 'Export this workspace',
+    handler: exportWorkspace,
   },
 ])
 
@@ -289,6 +325,7 @@ onBeforeUnmount(() => unlistenProgress?.())
       :commands="commands"
       @close="paletteOpen = false"
     />
+    <ImportDialog :open="importOpen" @close="importOpen = false" />
     <ToastHost />
   </div>
 </template>

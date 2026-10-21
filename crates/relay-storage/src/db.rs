@@ -99,6 +99,22 @@ impl Database {
             .map_err(|e| StorageError::TaskJoin(e.to_string()))?
     }
 
+    /// Runs a blocking closure inside a transaction on the blocking pool.
+    ///
+    /// The async counterpart of [`Database::transaction`]: multi-row writes
+    /// driven from async code — applying an import, for instance — need both
+    /// atomicity and to stay off the async worker threads.
+    pub async fn call_transaction<T, F>(&self, f: F) -> StorageResult<T>
+    where
+        T: Send + 'static,
+        F: FnOnce(&rusqlite::Transaction<'_>) -> StorageResult<T> + Send + 'static,
+    {
+        let db = self.clone();
+        tokio::task::spawn_blocking(move || db.transaction(f))
+            .await
+            .map_err(|e| StorageError::TaskJoin(e.to_string()))?
+    }
+
     /// Writes a consistent snapshot of the database to `dest`.
     ///
     /// Uses SQLite's online backup API rather than copying the file, which
@@ -249,6 +265,55 @@ mod tests {
         assert_eq!(name, "Backed up");
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn call_transaction_rolls_back_on_failure() {
+        let db = Database::open_in_memory().unwrap();
+        let outcome: StorageResult<()> = db
+            .call_transaction(|tx| {
+                tx.execute(
+                    "INSERT INTO workspaces (id, name, created_at, updated_at)
+                     VALUES ('w1', 'Doomed', 0, 0)",
+                    [],
+                )?;
+                Err(StorageError::Invalid("deliberate".into()))
+            })
+            .await;
+        assert!(outcome.is_err());
+
+        let count: i64 = db
+            .call(|conn| {
+                conn.query_row("SELECT COUNT(*) FROM workspaces", [], |r| r.get(0))
+                    .map_err(Into::into)
+            })
+            .await
+            .unwrap();
+        assert_eq!(count, 0, "a failed transaction left rows behind");
+    }
+
+    #[tokio::test]
+    async fn call_transaction_commits_on_success() {
+        let db = Database::open_in_memory().unwrap();
+        db.call_transaction(|tx| {
+            tx.execute(
+                "INSERT INTO workspaces (id, name, created_at, updated_at)
+                 VALUES ('w1', 'Kept', 0, 0)",
+                [],
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+        let count: i64 = db
+            .call(|conn| {
+                conn.query_row("SELECT COUNT(*) FROM workspaces", [], |r| r.get(0))
+                    .map_err(Into::into)
+            })
+            .await
+            .unwrap();
+        assert_eq!(count, 1);
     }
 
     #[tokio::test]

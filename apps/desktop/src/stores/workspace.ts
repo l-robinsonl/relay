@@ -164,6 +164,41 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     await refreshEnvironments()
   }
 
+  /** True when `ancestorId` is at or above `nodeId` in the tree. */
+  function isAncestor (ancestorId: string, nodeId: string): boolean {
+    const byId = new Map(collections.value.map((c) => [c.id, c]))
+    let cursor: string | null | undefined = nodeId
+    for (let hops = 0; cursor && hops < 100; hops += 1) {
+      if (cursor === ancestorId) return true
+      cursor = byId.get(cursor)?.parentId ?? null
+    }
+    return false
+  }
+
+  /** Moves a request or folder to a new parent and position. */
+  async function moveNode (
+    node: TreeNode,
+    parentId: string | null,
+    sortOrder: number,
+  ): Promise<void> {
+    try {
+      if (node.kind === 'request') {
+        await api.requestMove(node.id, parentId, sortOrder)
+      } else {
+        const collection = collections.value.find((c) => c.id === node.id)
+        if (!collection) return
+        await api.collectionSave({ ...collection, parentId, sortOrder })
+      }
+      await refreshTree()
+      if (parentId) expandedFolders.value = new Set(expandedFolders.value).add(parentId)
+    } catch (error) {
+      // The most likely rejection is a move that would detach a subtree,
+      // which the backend refuses outright.
+      toasts.error('That move is not allowed', error)
+      await refreshTree()
+    }
+  }
+
   function toggleFolder (id: string) {
     // A new Set so Vue's reactivity sees the change; mutating in place does
     // not trigger dependents for Set.
@@ -205,5 +240,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     deleteEnvironment,
     toggleFolder,
     isExpanded,
+    isAncestor,
+    moveNode,
   }
 })

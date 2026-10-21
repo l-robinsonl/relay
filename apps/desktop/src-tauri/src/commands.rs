@@ -11,6 +11,7 @@
 use std::sync::Arc;
 
 use relay_app::{RelayService, ResolvedPreview};
+use relay_core::import::ImportReport;
 use relay_models::{
     Collection, CollectionId, Environment, EnvironmentId, ExecutionId, ExecutionProgress,
     HistoryEntry, HttpExchange, RelayError, RelayResult, RequestDoc, RequestId, TreeNode,
@@ -333,6 +334,57 @@ pub fn import_curl(
     workspace_id: WorkspaceId,
 ) -> RelayResult<RequestDoc> {
     service.import_curl(&command, workspace_id)
+}
+
+/// Parses an import file without saving anything.
+///
+/// The frontend shows the report — including everything that could not be
+/// brought across — and calls `import_apply` only if the user accepts it.
+#[tauri::command]
+pub fn import_preview(
+    service: State<'_, RelayService>,
+    content: String,
+    workspace_id: WorkspaceId,
+) -> RelayResult<ImportReport> {
+    service.import_detect(&content, workspace_id)
+}
+
+/// Reads an import file from disk and previews it.
+#[tauri::command]
+pub async fn import_preview_path(
+    service: State<'_, RelayService>,
+    path: String,
+    workspace_id: WorkspaceId,
+) -> RelayResult<ImportReport> {
+    service.import_preview_path(path, workspace_id).await
+}
+
+/// Writes a workspace export to a file the user chose.
+#[tauri::command]
+pub async fn export_workspace_to_path(
+    service: State<'_, RelayService>,
+    workspace_id: WorkspaceId,
+    path: String,
+) -> RelayResult<()> {
+    service.export_workspace_to_path(workspace_id, path).await
+}
+
+/// Writes a previously previewed import to the database, atomically.
+#[tauri::command]
+pub async fn import_apply(
+    service: State<'_, RelayService>,
+    report: ImportReport,
+) -> RelayResult<usize> {
+    service.import_apply(report).await
+}
+
+/// Exports a whole workspace as portable JSON, with secrets removed.
+#[tauri::command]
+pub async fn export_workspace(
+    service: State<'_, RelayService>,
+    workspace_id: WorkspaceId,
+) -> RelayResult<String> {
+    service.export_workspace(workspace_id).await
 }
 
 /// Renders a request as a cURL command.

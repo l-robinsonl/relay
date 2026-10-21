@@ -6,6 +6,7 @@ import type {
   ExecutionProgress,
   HistoryEntry,
   HttpExchange,
+  ImportReport,
   RelayError,
   RequestDoc,
   TreeNode,
@@ -118,6 +119,15 @@ export const api = {
   // --- import and export ------------------------------------------------------
   importCurl: (command: string, workspaceId: string) =>
     call<RequestDoc>('import_curl', { command, workspaceId }),
+  importPreview: (content: string, workspaceId: string) =>
+    call<ImportReport>('import_preview', { content, workspaceId }),
+  importPreviewPath: (path: string, workspaceId: string) =>
+    call<ImportReport>('import_preview_path', { path, workspaceId }),
+  importApply: (report: ImportReport) => call<number>('import_apply', { report }),
+  exportWorkspaceToPath: (workspaceId: string, path: string) =>
+    call<void>('export_workspace_to_path', { workspaceId, path }),
+  exportWorkspace: (workspaceId: string) =>
+    call<string>('export_workspace', { workspaceId }),
   exportCurl: (doc: RequestDoc, environmentId?: string | null) =>
     call<string>('export_curl', { doc, environmentId: environmentId ?? null }),
 

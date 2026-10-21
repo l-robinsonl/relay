@@ -215,6 +215,34 @@ membership on the server. Knowing an object id grants nothing.
 |---|---|---|
 | **1** | Monorepo, Tauri shell, SQLite persistence, Rust HTTP engine, sidebar + tabs + response panel | Create, save, send and inspect a request; reopen it after a restart |
 | **2** | Collections/folders, environments, interpolation, all body modes, auth, history, search, shortcuts, import/export | A developer can drop Postman for everyday REST work, with no server |
+
+### Import and export
+
+Every import is a two-step: `import_preview` parses the file and returns an
+`ImportReport` — what would be created, and an `ImportWarning` for each thing
+that cannot be represented — and `import_apply` writes it in one transaction.
+The preview exists because an import is hard to undo: discovering after the
+fact that the auth on 200 requests did not survive is worse than being told
+first, and a half-applied import is worse than either.
+
+Postman collections are parsed against `serde_json::Value` rather than a
+strict struct. Real exports disagree with the published schema and with each
+other — `url` is sometimes an object and sometimes a string, numbers appear
+where strings are specified, `description` is a string in one version and an
+object in the next. One unrecognised field must not fail the other 199
+requests.
+
+Relay's own export (`relay.workspace`, format 1) is the portability
+guarantee. Object ids are preserved, so re-importing keeps every reference
+intact. Importing into the **same** workspace id is a restore and keeps those
+ids; importing into a **different** one is a copy, which mints fresh ids and
+rewrites the references between them — otherwise importing an export into a
+second workspace would move the originals out of the first.
+
+Secret values are stripped in `WorkspaceExport::build`, which is the single
+place that decides what leaves the device. Postman writes secret values into
+its export files in the clear; Relay reads the name, drops the value, and
+tells the user to enter it again.
 | **3** | Axum server, admin bootstrap, users, membership, revision sync, WebSockets, outbox, conflicts, Docker | Two users share a workspace, edit offline, reconnect and converge with no silent loss |
 | **4** | OAuth 2.0, sandboxed scripting and assertions, OpenAPI import, advanced search, certificates, performance work | — |
 | **5** | Installers, signing guidance, CI, migration/recovery tests, security review, benchmarks | — |

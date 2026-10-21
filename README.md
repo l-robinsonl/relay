@@ -8,11 +8,11 @@ machine. If a team wants to share them, they can run one small server
 themselves — or pay us a small amount to run it for them. Nothing about the
 desktop application changes either way.
 
-> **Status: Phase 1 complete.** The HTTP engine, local persistence, variable
-> resolution, cURL import/export and the desktop interface are built and
-> tested. The synchronisation server, hosted service and billing are designed
-> but not yet implemented. See [the roadmap](#roadmap) for exactly what works
-> today.
+> **Status: Phases 1 and 2 complete.** The HTTP engine, local persistence,
+> variable resolution, Postman and cURL import, portable export and the
+> desktop interface are built and tested. The synchronisation server, hosted
+> service and billing are designed but not yet implemented. See
+> [the roadmap](#roadmap) for exactly what works today.
 
 ## Why
 
@@ -67,13 +67,16 @@ rather than hanging.
 the value goes to a credential store and is injected only for the moment a
 request is sent.
 
-**Import and export** — paste a `curl` command, get a request. Copy any request
-back out as `curl`. Options that cannot be represented are reported, not
-silently dropped.
+**Import and export** — bring in a Postman v2.1 collection or environment,
+paste a `curl` command, or restore a Relay export. Every import is previewed
+first: you see what will be created *and* what cannot be represented before
+anything is written, and the whole thing lands in one transaction or not at
+all. Copy any request back out as `curl`, or export an entire workspace as
+portable JSON.
 
 **Interface** — a designed dark theme and an equally designed light one,
-request tabs, resizable and re-orientable panes, a command palette, keyboard
-shortcuts throughout, and local request history.
+request tabs, resizable and re-orientable panes, drag-and-drop reordering, a
+command palette, keyboard shortcuts throughout, and local request history.
 
 ## What does not work yet
 
@@ -82,23 +85,22 @@ Stated plainly, because a README that implies otherwise wastes your time:
 - **Synchronisation and the server.** Designed in detail, schema in place
   (revisions, tombstones, an outbox table), but no server exists yet.
 - **Relay Cloud and billing.** Designed, not built.
-- **Scripts and assertions.** You can write and save them; nothing executes
-  them. The sandbox is Phase 4.
+- **Scripts and assertions.** You can write and save them, and a Postman
+  import brings them across, but nothing executes them. The sandbox is
+  Phase 4.
 - **OAuth 2.0 flows.** The configuration round-trips; the flows do not run.
-- **Postman and OpenAPI import.** cURL import works; these do not.
-- **Drag-and-drop reordering.** The backend supports it; the sidebar does not
-  yet expose it.
-- **Multipart editing in the UI.** The engine handles multipart fully; the
-  editor for it is not built.
+  A Postman OAuth 2.0 block imports as a bearer token.
+- **OpenAPI import.** Phase 4. Postman, cURL and Relay exports all work.
+- **Digest, NTLM, AWS and Hawk auth.** Reported on import, not supported.
 
 ## Roadmap
 
 | Phase | Scope | Status |
 |---|---|---|
 | 1 | Desktop shell, HTTP engine, SQLite persistence, save and reopen | **Done** |
-| 2 | Collections, environments, interpolation, auth, history, import/export | Mostly done |
+| 2 | Collections, environments, interpolation, auth, history, import/export | **Done** |
 | 3 | Self-hosted Axum sync server, users, revisions, WebSockets, conflicts | Designed |
-| 4 | OAuth 2.0, sandboxed scripting, OpenAPI import, certificates | Designed |
+| 4 | OAuth 2.0 flows, sandboxed scripting, OpenAPI import, certificates | Designed |
 | 5 | Installers, signing, CI, benchmarks, security review | Not started |
 | 6 | Relay Cloud on Neon Postgres, multitenant, RLS | Designed |
 | 7 | Stripe billing, per-seat annual subscriptions, entitlements | Designed |

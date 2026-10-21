@@ -12,12 +12,18 @@
 
 pub mod curl;
 mod error;
+pub mod import;
 pub mod interpolate;
+pub mod portable;
+pub mod postman;
 pub mod resolve;
 
 pub use curl::{export_curl, import_curl};
 pub use error::{CoreError, CoreResult};
+pub use import::{ImportReport, ImportWarning};
 pub use interpolate::{
     Binding, Interpolated, Scope, VariableContext, interpolate, referenced_names,
 };
+pub use portable::WorkspaceExport;
+pub use postman::{import_any, import_collection, import_environment};
 pub use resolve::{Resolution, ResolutionInput, build_context, resolve};

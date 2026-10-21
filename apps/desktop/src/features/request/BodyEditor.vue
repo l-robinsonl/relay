@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { FileUp, Wand2 } from '@lucide/vue'
-import type { KeyValue, RequestBody } from '@relay/shared-types'
+import type { FormField, KeyValue, RequestBody } from '@relay/shared-types'
 import CodeEditor from '@/components/ui/CodeEditor.vue'
 import KeyValueEditor from '@/components/ui/KeyValueEditor.vue'
+import MultipartEditor from '@/components/ui/MultipartEditor.vue'
 import { tryFormatJson } from '@/composables/useFormat'
 
 const props = defineProps<{ modelValue: RequestBody }>()
@@ -65,6 +66,10 @@ const graphQlVariables = computed(() =>
 
 const binaryPath = computed(() =>
   props.modelValue.mode === 'binary' ? props.modelValue.path : '',
+)
+
+const multipartFields = computed<FormField[]>(() =>
+  props.modelValue.mode === 'multipart' ? props.modelValue.fields : [],
 )
 
 /** Switching mode builds a fresh body, so no stale content can be sent. */
@@ -167,13 +172,11 @@ async function pickFile () {
         @update:model-value="setFields"
       />
 
-      <div
+      <MultipartEditor
         v-else-if="mode === 'multipart'"
-        class="flex h-full items-center justify-center px-6 text-center text-xs text-muted"
-      >
-        Multipart fields are editable from the Rust API and will get a dedicated editor in
-        the next slice. The engine already streams file parts without buffering them.
-      </div>
+        :model-value="multipartFields"
+        @update:model-value="emit('update:modelValue', { mode: 'multipart', fields: $event })"
+      />
 
       <div v-else-if="mode === 'binary'" class="space-y-3 p-4">
         <button type="button" class="btn text-xs" @click="pickFile">

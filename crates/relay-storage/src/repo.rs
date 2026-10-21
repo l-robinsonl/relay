@@ -204,6 +204,7 @@ impl CollectionRepo {
                  rev, dirty, deleted_at)
              VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,1,?13)
              ON CONFLICT(id) DO UPDATE SET
+                workspace_id   = excluded.workspace_id,
                 parent_id      = excluded.parent_id,
                 name           = excluded.name,
                 description    = excluded.description,
@@ -374,6 +375,7 @@ impl RequestRepo {
                  rev, dirty, deleted_at)
              VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,1,?20)
              ON CONFLICT(id) DO UPDATE SET
+                workspace_id      = excluded.workspace_id,
                 collection_id     = excluded.collection_id,
                 name              = excluded.name,
                 description       = excluded.description,
@@ -614,6 +616,7 @@ impl EnvironmentRepo {
                  created_at, updated_at, rev, dirty, deleted_at)
              VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,1,?10)
              ON CONFLICT(id) DO UPDATE SET
+                workspace_id   = excluded.workspace_id,
                 name           = excluded.name,
                 variables_json = excluded.variables_json,
                 color          = excluded.color,

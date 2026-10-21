@@ -1,5 +1,5 @@
-// Generated from the Rust types in crates/relay-models.
-// Run `npm run bindings` (cargo test -p relay-models export_bindings) to refresh.
+// Generated from the Rust types in crates/relay-models and crates/relay-core.
+// Run `npm run bindings` to refresh.
 // Do not edit by hand: a change to a Rust struct should break the build here.
 
 export type { ApiKeyLocation } from './generated/ApiKeyLocation'
@@ -22,6 +22,8 @@ export type { HttpExchange } from './generated/HttpExchange'
 export type { HttpMethod } from './generated/HttpMethod'
 export type { HttpRequestSpec } from './generated/HttpRequestSpec'
 export type { HttpResponseData } from './generated/HttpResponseData'
+export type { ImportReport } from './generated/ImportReport'
+export type { ImportWarning } from './generated/ImportWarning'
 export type { KeyValue } from './generated/KeyValue'
 export type { OAuth2Config } from './generated/OAuth2Config'
 export type { OAuth2Grant } from './generated/OAuth2Grant'
