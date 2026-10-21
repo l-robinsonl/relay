@@ -14,6 +14,7 @@ import type { Tab, ResponseTab } from '@/types/ui'
 import CodeEditor from '@/components/ui/CodeEditor.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import StatusBadge from '@/components/ui/StatusBadge.vue'
+import TestResults from '@/features/response/TestResults.vue'
 import { formatBody, formatBytes, formatDuration } from '@/composables/useFormat'
 import { describeShortcut } from '@/composables/useShortcuts'
 import { useTabsStore } from '@/stores/tabs'
@@ -35,8 +36,25 @@ const responseTabs = computed<{ id: ResponseTab; label: string; count?: number }
   { id: 'body', label: 'Body' },
   { id: 'headers', label: 'Headers', count: response.value?.headers.length ?? 0 },
   { id: 'cookies', label: 'Cookies', count: response.value?.cookies.length ?? 0 },
-  { id: 'tests', label: 'Tests' },
+  { id: 'tests', label: 'Tests', count: testCount.value },
 ])
+
+/** Shown on the Tests tab so a failure is visible without opening it. */
+const testCount = computed(() => {
+  const tests = props.tab.tests
+  if (!tests) return 0
+  return (
+    tests.tests.flatMap((t) => t.assertions).length + tests.looseAssertions.length
+  )
+})
+
+const testsFailed = computed(() => {
+  const tests = props.tab.tests
+  if (!tests) return false
+  if (tests.error) return true
+  if (tests.looseAssertions.some((a) => !a.passed)) return true
+  return tests.tests.some((t) => t.error || t.assertions.some((a) => !a.passed))
+})
 
 /** The body as text, pretty-printed when it is JSON and that is wanted. */
 const bodyText = computed(() => {
@@ -195,7 +213,11 @@ const sendShortcut = describeShortcut({ key: 'Enter', mod: true })
           <span
             v-if="item.count"
             class="ml-1 rounded-full px-1.5 text-xxs tabular-nums"
-            :style="{ backgroundColor: 'var(--surface-active)', color: 'var(--text-muted)' }"
+            :style="
+              item.id === 'tests' && testsFailed
+                ? { backgroundColor: 'var(--danger-muted)', color: 'var(--danger)' }
+                : { backgroundColor: 'var(--surface-active)', color: 'var(--text-muted)' }
+            "
           >{{ item.count }}</span>
         </button>
       </nav>
@@ -323,13 +345,7 @@ const sendShortcut = describeShortcut({ key: 'Enter', mod: true })
         </div>
 
         <!-- Tests -->
-        <EmptyState
-          v-else
-          title="No tests have run"
-          description="Assertions execute in a sandbox, which arrives in Phase 4. Scripts you write now are saved with the request."
-        >
-          <template #icon><Zap :size="22" /></template>
-        </EmptyState>
+        <TestResults v-else :outcome="tab.tests" />
       </div>
     </template>
 

@@ -1,4 +1,5 @@
 import type { HttpResponseData, RequestDoc, TransportError } from '@relay/shared-types'
+import type { ScriptOutcome } from '@/services/ipc'
 
 /** An editor tab. */
 export interface Tab {
@@ -19,6 +20,8 @@ export interface Tab {
   activeSection: RequestSection
   /** Which response tab is showing. */
   activeResponseTab: ResponseTab
+  /** What the post-response script reported, if it ran. */
+  tests: ScriptOutcome | null
 }
 
 /** The outcome shown in the response panel. */

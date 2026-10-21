@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import type { HttpExchange, RequestDoc } from '@relay/shared-types'
 import type { RequestSection, ResponseTab, Tab, TabResult } from '@/types/ui'
+import type { ScriptOutcome } from '@/services/ipc'
 import { api, onExecutionProgress } from '@/services/ipc'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { useToastStore } from '@/stores/toast'
@@ -60,6 +61,7 @@ function newTab (doc: RequestDoc, requestId: string | null): Tab {
     bytesRead: 0,
     activeSection: 'params',
     activeResponseTab: 'body',
+    tests: null,
   }
 }
 
@@ -182,15 +184,41 @@ export const useTabsStore = defineStore('tabs', () => {
     }
 
     const executionId = crypto.randomUUID()
-    patchTab(tabId, { executionId, bytesRead: 0, result: null })
+    patchTab(tabId, { executionId, bytesRead: 0, result: null, tests: null })
 
     try {
-      const exchange = await api.httpSend(executionId, tab.doc, workspace.activeEnvironmentId)
-      patchTab(tabId, { result: toResult(exchange), executionId: null })
+      const outcome = await api.httpSendWithTests(
+        executionId,
+        tab.doc,
+        workspace.activeEnvironmentId,
+      )
+      patchTab(tabId, {
+        result: toResult(outcome.exchange),
+        tests: outcome.tests ?? null,
+        executionId: null,
+      })
+
+      // Jump to the results when a test failed: a red count in a tab the
+      // user is not looking at is easy to miss.
+      if (outcome.tests && !scriptPassed(outcome.tests)) {
+        patchTab(tabId, { activeResponseTab: 'tests' })
+      }
+
+      // A script may have captured a token into a workspace variable.
+      if (outcome.tests && Object.keys(outcome.tests.variables).length > 0) {
+        await workspace.loadWorkspaces()
+      }
     } catch (error) {
       patchTab(tabId, { executionId: null })
       toasts.error('The request could not be sent', error)
     }
+  }
+
+  /** True when a script reported nothing wrong. */
+  function scriptPassed (outcome: ScriptOutcome): boolean {
+    if (outcome.error) return false
+    if (outcome.looseAssertions.some((a) => !a.passed)) return false
+    return outcome.tests.every((t) => !t.error && t.assertions.every((a) => a.passed))
   }
 
   /** Cancels a tab's in-flight request. */
@@ -247,6 +275,7 @@ export const useTabsStore = defineStore('tabs', () => {
     update,
     setSection,
     setResponseTab,
+    scriptPassed,
     save,
     send,
     cancel,

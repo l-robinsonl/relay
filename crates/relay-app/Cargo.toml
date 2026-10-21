@@ -12,6 +12,7 @@ relay-models.workspace = true
 relay-core.workspace = true
 relay-http.workspace = true
 relay-storage.workspace = true
+relay-script.workspace = true
 relay-sync.workspace = true
 uuid.workspace = true
 rusqlite = { version = "0.39", features = ["bundled"] }

@@ -10,7 +10,7 @@
 
 use std::sync::Arc;
 
-use relay_app::service::{ConflictView, SyncStatus};
+use relay_app::service::{ConflictView, SendOutcome, SyncStatus};
 use relay_app::sync::{ServerHealth, SyncOutcome};
 use relay_app::{RelayService, ResolvedPreview};
 use relay_core::import::ImportReport;
@@ -254,6 +254,24 @@ pub async fn http_send(
 #[tauri::command]
 pub fn cookies_clear(service: State<'_, RelayService>) {
     service.clear_cookies();
+}
+
+/// Sends a request and runs its tests against the response.
+///
+/// A failing test does not fail the call: the response is returned
+/// either way, with the verdict beside it.
+#[tauri::command]
+pub async fn http_send_with_tests(
+    app: tauri::AppHandle,
+    service: State<'_, RelayService>,
+    execution_id: ExecutionId,
+    doc: RequestDoc,
+    environment_id: Option<EnvironmentId>,
+) -> RelayResult<SendOutcome> {
+    let progress = Arc::new(WindowProgress { app });
+    service
+        .request_send_with_tests(execution_id, doc, environment_id, progress)
+        .await
 }
 
 /// Cancels an in-flight request. Returns true if one was running.

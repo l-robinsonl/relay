@@ -190,8 +190,11 @@ watch(
           "
         />
         <p class="shrink-0 border-t border-subtle px-3 py-2 text-xs text-muted">
-          Scripts are stored with the request but are not executed yet — the sandbox lands
-          in Phase 4. Nothing here runs, so it cannot fail silently.
+          Runs after each response, in a sandbox with no filesystem, network or process
+          access. <code class="font-mono">response</code>,
+          <code class="font-mono">request</code> and
+          <code class="font-mono">relay.getVariable</code> are available; secret values
+          are not. Results appear under Tests.
         </p>
       </div>
 

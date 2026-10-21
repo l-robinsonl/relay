@@ -1,0 +1,20 @@
+[package]
+name = "relay-script"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Relay's sandboxed script runtime for request assertions."
+
+[dependencies]
+relay-models.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+ts-rs.workspace = true
+rquickjs = { version = "0.14", default-features = false, features = ["classes", "properties"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full"] }

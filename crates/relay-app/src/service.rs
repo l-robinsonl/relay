@@ -15,6 +15,7 @@ use relay_models::{
     HttpExchange, HttpRequestSpec, RelayError, RelayResult, RequestDoc, RequestId, Timestamp,
     TreeNode, Workspace, WorkspaceId,
 };
+use relay_script::{ScriptEngine, ScriptOutcome, ScriptRequest, ScriptResponse};
 use relay_storage::{
     AppStateRepo, CollectionRepo, Database, EnvironmentRepo, HistoryRepo, RequestRepo, TreeRepo,
     WorkspaceRepo, state_keys,
@@ -27,6 +28,17 @@ use crate::sync::{
 
 /// How many history entries are kept per workspace.
 const HISTORY_LIMIT: u32 = 1000;
+
+/// An exchange together with whatever its tests reported.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SendOutcome {
+    /// What the HTTP engine returned.
+    pub exchange: HttpExchange,
+    /// What the post-response script reported, if there was one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tests: Option<ScriptOutcome>,
+}
 
 /// The result of resolving a request, as the UI sees it.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -376,6 +388,149 @@ impl RelayService {
         self.record_history(&doc, &spec, &exchange).await;
 
         Ok(exchange)
+    }
+
+    /// Sends a request and runs its tests against the response.
+    ///
+    /// A failing test never turns a successful exchange into an error:
+    /// the response is what the user asked for, and the verdict on it is
+    /// separate information shown beside it.
+    pub async fn request_send_with_tests(
+        &self,
+        execution_id: relay_models::ExecutionId,
+        doc: RequestDoc,
+        environment: Option<EnvironmentId>,
+        progress: Arc<dyn ProgressSink>,
+    ) -> RelayResult<SendOutcome> {
+        let script = doc.scripts.post_response.clone();
+        let exchange = self
+            .request_send(execution_id, doc.clone(), environment.clone(), progress)
+            .await?;
+
+        if script.trim().is_empty() {
+            return Ok(SendOutcome {
+                exchange,
+                tests: None,
+            });
+        }
+
+        // Only a response can be asserted about. A failed or cancelled
+        // exchange has nothing to test, and running the script anyway
+        // would produce confusing errors about `response` being absent.
+        let HttpExchange::Success {
+            response, request, ..
+        } = &exchange
+        else {
+            return Ok(SendOutcome {
+                exchange,
+                tests: None,
+            });
+        };
+
+        let variables = self.script_variables(&doc, environment.clone()).await;
+
+        let outcome = ScriptEngine::new().run(
+            &script,
+            Some(&ScriptResponse::from_response(response)),
+            Some(&ScriptRequest::from_spec(request)),
+            &variables,
+        );
+
+        // Variables a script set are written back as ordinary workspace
+        // variables. Nothing a script writes becomes a secret: it has no
+        // way to reach the credential store, and promoting its output
+        // into one would be a route around that.
+        if !outcome.variables.is_empty() {
+            self.apply_script_variables(&doc.workspace_id, &outcome.variables)
+                .await;
+        }
+
+        Ok(SendOutcome {
+            exchange,
+            tests: Some(outcome),
+        })
+    }
+
+    /// The non-secret variables a script may read.
+    async fn script_variables(
+        &self,
+        doc: &RequestDoc,
+        environment: Option<EnvironmentId>,
+    ) -> std::collections::BTreeMap<String, String> {
+        let Ok(scope) = self.load_scope(doc, environment).await else {
+            return Default::default();
+        };
+
+        let mut variables = std::collections::BTreeMap::new();
+
+        let mut absorb = |list: &[relay_models::Variable]| {
+            for variable in list.iter().filter(|v| v.enabled && !v.secret) {
+                variables.insert(variable.key.clone(), variable.value.clone());
+            }
+        };
+
+        if let Some(workspace) = &scope.workspace {
+            absorb(&workspace.variables);
+        }
+        for collection in &scope.folder_chain {
+            absorb(&collection.variables);
+        }
+        if let Some(environment) = &scope.environment {
+            absorb(&environment.variables);
+        }
+
+        variables
+    }
+
+    /// Writes variables a script set back to the workspace.
+    async fn apply_script_variables(
+        &self,
+        workspace_id: &WorkspaceId,
+        variables: &std::collections::BTreeMap<String, String>,
+    ) {
+        let id = workspace_id.clone();
+        let updates = variables.clone();
+
+        let result = self
+            .db
+            .call(move |conn| {
+                let mut workspace = WorkspaceRepo::get(conn, &id)?;
+                for (key, value) in &updates {
+                    match workspace.variables.iter_mut().find(|v| &v.key == key) {
+                        // A secret variable is never overwritten by a
+                        // script: that would let one replace a credential
+                        // with a value of its choosing.
+                        Some(existing) if existing.secret => {}
+                        Some(existing) => existing.value = value.clone(),
+                        None => workspace
+                            .variables
+                            .push(relay_models::Variable::new(key, value)),
+                    }
+                }
+                workspace.updated_at = Timestamp::now();
+                WorkspaceRepo::save(conn, &workspace)
+            })
+            .await;
+
+        if let Err(error) = result {
+            tracing::warn!("could not apply variables a script set: {error}");
+        }
+    }
+
+    /// Runs a script against the last response, without sending anything.
+    ///
+    /// Lets someone iterate on assertions without hammering an endpoint.
+    pub fn run_script(
+        &self,
+        source: &str,
+        response: Option<&relay_models::HttpResponseData>,
+    ) -> ScriptOutcome {
+        ScriptEngine::new().run(
+            source,
+            response.map(ScriptResponse::from_response).as_ref(),
+            None,
+            &Default::default(),
+        )
     }
 
     /// Discards every stored cookie.

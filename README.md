@@ -91,6 +91,12 @@ anything is written, and the whole thing lands in one transaction or not at
 all. Copy any request back out as `curl`, or export an entire workspace as
 portable JSON.
 
+**Tests** — assertions run after each response, in a sandbox with no
+filesystem, network or process access and hard limits on time and memory.
+A script can read the response and non-secret variables, and capture a
+value for the next request; it cannot read a credential.
+[How it works](docs/SCRIPTING.md).
+
 **Interface** — a designed dark theme and an equally designed light one,
 request tabs, resizable and re-orientable panes, drag-and-drop reordering, a
 command palette, keyboard shortcuts throughout, and local request history.
@@ -109,9 +115,8 @@ Stated plainly, because a README that implies otherwise wastes your time:
 - **Synchronisation and the server.** Designed in detail, schema in place
   (revisions, tombstones, an outbox table), but no server exists yet.
 - **Relay Cloud and billing.** Designed, not built.
-- **Scripts and assertions.** You can write and save them, and a Postman
-  import brings them across, but nothing executes them. The sandbox is
-  Phase 4.
+- **Pre-request scripts.** The field is stored and imported, but only
+  post-response scripts run.
 - **OAuth 2.0 flows.** The configuration round-trips; the flows do not run.
   A Postman OAuth 2.0 block imports as a bearer token.
 - **Digest, NTLM, AWS and Hawk auth.** Reported on import, not supported.
@@ -123,7 +128,7 @@ Stated plainly, because a README that implies otherwise wastes your time:
 | 1 | Desktop shell, HTTP engine, SQLite persistence, save and reopen | **Done** |
 | 2 | Collections, environments, interpolation, auth, history, import/export | **Done** |
 | 3 | Self-hosted Axum sync server, users, revisions, WebSockets, conflicts | **Done** |
-| 4 | OAuth 2.0 flows, sandboxed scripting, certificates | In progress — OpenAPI import done |
+| 4 | OAuth 2.0 flows, certificates | In progress — OpenAPI import and scripting done |
 | 5 | Installers, signing, CI, benchmarks, security review | In progress — installers build, signing and CI unrun |
 | 6 | Relay Cloud on Neon Postgres, multitenant, RLS | Designed |
 | 7 | Stripe billing, per-seat annual subscriptions, entitlements | Designed |

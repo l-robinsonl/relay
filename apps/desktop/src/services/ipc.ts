@@ -63,6 +63,41 @@ export interface ConflictView {
   detectedAt: number
 }
 
+/** One assertion's verdict. */
+export interface Assertion {
+  passed: boolean
+  message: string
+}
+
+/** A named group of assertions. */
+export interface TestCase {
+  name: string
+  assertions: Assertion[]
+  error?: string | null
+}
+
+/** A line a script printed. */
+export interface ConsoleLine {
+  level: 'log' | 'warn' | 'error'
+  text: string
+}
+
+/** Everything a script run produced. */
+export interface ScriptOutcome {
+  tests: TestCase[]
+  looseAssertions: Assertion[]
+  console: ConsoleLine[]
+  variables: Record<string, string>
+  error?: string | null
+  durationMs: number
+}
+
+/** An exchange together with whatever its tests reported. */
+export interface SendOutcome {
+  exchange: HttpExchange
+  tests?: ScriptOutcome | null
+}
+
 /** A resolved request, as returned by `request_resolve`. */
 export interface ResolvedPreview {
   spec: import('@relay/shared-types').HttpRequestSpec
@@ -135,6 +170,16 @@ export const api = {
   // --- execution -----------------------------------------------------------
   httpSend: (executionId: string, doc: RequestDoc, environmentId?: string | null) =>
     call<HttpExchange>('http_send', { executionId, doc, environmentId: environmentId ?? null }),
+  httpSendWithTests: (
+    executionId: string,
+    doc: RequestDoc,
+    environmentId?: string | null,
+  ) =>
+    call<SendOutcome>('http_send_with_tests', {
+      executionId,
+      doc,
+      environmentId: environmentId ?? null,
+    }),
   httpCancel: (executionId: string) => call<boolean>('http_cancel', { executionId }),
   cookiesClear: () => call<void>('cookies_clear'),
 

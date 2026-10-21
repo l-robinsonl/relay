@@ -75,6 +75,7 @@ pub fn run() {
             commands::request_move,
             commands::request_resolve,
             commands::http_send,
+            commands::http_send_with_tests,
             commands::http_cancel,
             commands::cookies_clear,
             commands::environment_list,

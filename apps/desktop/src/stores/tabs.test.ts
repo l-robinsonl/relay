@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   requestGet: vi.fn(),
   requestSave: vi.fn(),
   httpSend: vi.fn(),
+  httpSendWithTests: vi.fn(),
   httpCancel: vi.fn(),
 }))
 
@@ -232,7 +233,7 @@ describe('sending', () => {
         isText: true,
       },
     }
-    mocks.httpSend.mockResolvedValue(exchange)
+    mocks.httpSendWithTests.mockResolvedValue({ exchange, tests: null })
 
     await tabs.send(tab.id)
 
@@ -247,13 +248,16 @@ describe('sending', () => {
     const tab = tabs.openDraft()!
     tabs.update(tab.id, { url: 'https://unreachable.example' })
 
-    mocks.httpSend.mockResolvedValue({
+    mocks.httpSendWithTests.mockResolvedValue({
+      tests: null,
+      exchange: {
       outcome: 'failure',
       executionId: 'e1',
       request: { method: 'GET', url: 'x', headers: [], queryParams: [], body: { mode: 'none' }, auth: { type: 'none' }, settings: tab.doc.settings },
       error: { kind: 'dnsFailure', message: 'Could not resolve the hostname.' },
       elapsedMs: 30,
-    } satisfies HttpExchange)
+      } satisfies HttpExchange,
+    })
 
     await tabs.send(tab.id)
 
@@ -267,11 +271,14 @@ describe('sending', () => {
     const tab = tabs.openDraft()!
     tabs.update(tab.id, { url: 'https://example.com' })
 
-    mocks.httpSend.mockResolvedValue({
-      outcome: 'cancelled',
-      executionId: 'e1',
-      elapsedMs: 12,
-    } satisfies HttpExchange)
+    mocks.httpSendWithTests.mockResolvedValue({
+      exchange: {
+        outcome: 'cancelled',
+        executionId: 'e1',
+        elapsedMs: 12,
+      } satisfies HttpExchange,
+      tests: null,
+    })
 
     await tabs.send(tab.id)
     expect(tabs.tabs[0]!.result?.kind).toBe('cancelled')
@@ -283,7 +290,7 @@ describe('sending', () => {
 
     await tabs.send(tab.id)
 
-    expect(mocks.httpSend).not.toHaveBeenCalled()
+    expect(mocks.httpSendWithTests).not.toHaveBeenCalled()
   })
 
   it('does not start a second request while one is in flight', async () => {
@@ -294,7 +301,7 @@ describe('sending', () => {
 
     await tabs.send(tab.id)
 
-    expect(mocks.httpSend).not.toHaveBeenCalled()
+    expect(mocks.httpSendWithTests).not.toHaveBeenCalled()
   })
 
   it('clears the in-flight marker when sending throws', async () => {
@@ -302,7 +309,7 @@ describe('sending', () => {
     const tab = tabs.openDraft()!
     tabs.update(tab.id, { url: 'https://example.com' })
 
-    mocks.httpSend.mockRejectedValue({ kind: 'interpolation', message: 'unresolved: baseUrl' })
+    mocks.httpSendWithTests.mockRejectedValue({ kind: 'interpolation', message: 'unresolved: baseUrl' })
     await tabs.send(tab.id)
 
     // A failure must not leave the Send button stuck showing Cancel.
