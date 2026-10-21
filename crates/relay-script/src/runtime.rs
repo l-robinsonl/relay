@@ -9,6 +9,7 @@ use rquickjs::{CatchResultExt, Context, Function, Runtime};
 use crate::value::{
     Assertion, ConsoleLevel, ConsoleLine, ScriptOutcome, ScriptRequest, ScriptResponse, TestCase,
 };
+use relay_models::RequestPatch;
 
 /// The test framework, injected ahead of every script.
 const PRELUDE: &str = include_str!("prelude.js");
@@ -40,6 +41,15 @@ impl Default for ScriptLimits {
             max_console_lines: 200,
         }
     }
+}
+
+/// When a script runs, which decides what it is allowed to touch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScriptPhase {
+    /// Before the request is sent: may change it, cannot see a response.
+    PreRequest,
+    /// After the response arrives: may assert, cannot change the request.
+    PostResponse,
 }
 
 /// Runs scripts in a fresh sandbox each time.
@@ -76,9 +86,39 @@ impl ScriptEngine {
         request: Option<&ScriptRequest>,
         variables: &std::collections::BTreeMap<String, String>,
     ) -> ScriptOutcome {
+        self.run_phase(
+            ScriptPhase::PostResponse,
+            source,
+            response,
+            request,
+            variables,
+        )
+    }
+
+    /// Runs a script before the request goes out.
+    ///
+    /// The script sees the request as it currently stands and may ask for
+    /// changes, which come back in [`ScriptOutcome::request_patch`].
+    pub fn run_pre_request(
+        &self,
+        source: &str,
+        request: Option<&ScriptRequest>,
+        variables: &std::collections::BTreeMap<String, String>,
+    ) -> ScriptOutcome {
+        self.run_phase(ScriptPhase::PreRequest, source, None, request, variables)
+    }
+
+    fn run_phase(
+        &self,
+        phase: ScriptPhase,
+        source: &str,
+        response: Option<&ScriptResponse>,
+        request: Option<&ScriptRequest>,
+        variables: &std::collections::BTreeMap<String, String>,
+    ) -> ScriptOutcome {
         let started = Instant::now();
 
-        let mut outcome = match self.execute(source, response, request, variables, started) {
+        let mut outcome = match self.execute(phase, source, response, request, variables, started) {
             Ok(outcome) => outcome,
             Err(message) => ScriptOutcome {
                 error: Some(message),
@@ -92,6 +132,7 @@ impl ScriptEngine {
 
     fn execute(
         &self,
+        phase: ScriptPhase,
         source: &str,
         response: Option<&ScriptResponse>,
         request: Option<&ScriptRequest>,
@@ -163,6 +204,8 @@ impl ScriptEngine {
             Arc::new(std::sync::Mutex::new(Vec::new()));
         let written: Arc<std::sync::Mutex<std::collections::BTreeMap<String, String>>> =
             Arc::new(std::sync::Mutex::new(std::collections::BTreeMap::new()));
+        let patch: Arc<std::sync::Mutex<RequestPatch>> =
+            Arc::new(std::sync::Mutex::new(RequestPatch::default()));
 
         let limits = self.limits;
         let result = context.with(|ctx| -> Result<ScriptOutcome, String> {
@@ -170,6 +213,7 @@ impl ScriptEngine {
 
             install_console(&ctx, &globals, Arc::clone(&console), limits)?;
             install_variables(&ctx, &globals, variables.clone(), Arc::clone(&written))?;
+            install_request_api(&ctx, &globals, phase, Arc::clone(&patch))?;
             install_data(&ctx, &globals, response, request)?;
 
             ctx.eval::<(), _>(PRELUDE)
@@ -244,6 +288,7 @@ impl ScriptEngine {
 
         outcome.console = console.lock().map(|c| c.clone()).unwrap_or_default();
         outcome.variables = written.lock().map(|v| v.clone()).unwrap_or_default();
+        outcome.request_patch = patch.lock().map(|p| p.clone()).unwrap_or_default();
 
         Ok(outcome)
     }
@@ -351,6 +396,136 @@ fn install_variables<'js>(
     globals
         .set("relay", relay)
         .map_err(|e| format!("could not install the relay object: {e}"))
+}
+
+/// Installs the pre-request mutation API onto the `relay` object.
+///
+/// In a post-response script the same names exist but throw, because
+/// `relay.setHeader` doing nothing after the request has already gone
+/// would be a confusing way to spend an afternoon.
+fn install_request_api<'js>(
+    ctx: &rquickjs::Ctx<'js>,
+    globals: &rquickjs::Object<'js>,
+    phase: ScriptPhase,
+    patch: Arc<std::sync::Mutex<RequestPatch>>,
+) -> Result<(), String> {
+    let relay: rquickjs::Object<'js> = globals
+        .get("relay")
+        .map_err(|e| format!("the relay object is missing: {e}"))?;
+
+    if phase == ScriptPhase::PostResponse {
+        for name in [
+            "setHeader",
+            "removeHeader",
+            "setQueryParam",
+            "removeQueryParam",
+            "setUrl",
+            "setMethod",
+            "setBody",
+        ] {
+            let message = format!(
+                "relay.{name} can only be used in a pre-request script — \
+                 the request has already been sent"
+            );
+            let throwing = Function::new(ctx.clone(), move |ctx: rquickjs::Ctx<'js>| {
+                Err::<(), _>(ctx.throw(rquickjs::String::from_str(ctx.clone(), &message)?.into()))
+            })
+            .map_err(|e| format!("could not create relay.{name}: {e}"))?;
+
+            relay
+                .set(name, throwing)
+                .map_err(|e| format!("could not install relay.{name}: {e}"))?;
+        }
+        return Ok(());
+    }
+
+    /// A name a script passed in, trimmed and bounded.
+    fn clean(value: String) -> String {
+        value.trim().chars().take(4096).collect()
+    }
+
+    // Bounded, so a loop cannot fill memory through any of these doors.
+    const MAX_ENTRIES: usize = 200;
+
+    let sink = Arc::clone(&patch);
+    let set_header = Function::new(ctx.clone(), move |name: String, value: String| {
+        if let Ok(mut p) = sink.lock() {
+            let name = clean(name);
+            if !name.is_empty() && p.headers.len() < MAX_ENTRIES {
+                p.headers.insert(name, value.chars().take(8192).collect());
+            }
+        }
+    })
+    .map_err(|e| format!("could not create relay.setHeader: {e}"))?;
+
+    let sink = Arc::clone(&patch);
+    let remove_header = Function::new(ctx.clone(), move |name: String| {
+        if let Ok(mut p) = sink.lock() {
+            let name = clean(name);
+            if !name.is_empty() && p.removed_headers.len() < MAX_ENTRIES {
+                p.headers.remove(&name);
+                p.removed_headers.push(name);
+            }
+        }
+    })
+    .map_err(|e| format!("could not create relay.removeHeader: {e}"))?;
+
+    let sink = Arc::clone(&patch);
+    let set_query = Function::new(ctx.clone(), move |name: String, value: String| {
+        if let Ok(mut p) = sink.lock() {
+            let name = clean(name);
+            if !name.is_empty() && p.query.len() < MAX_ENTRIES {
+                p.query.insert(name, value.chars().take(8192).collect());
+            }
+        }
+    })
+    .map_err(|e| format!("could not create relay.setQueryParam: {e}"))?;
+
+    let sink = Arc::clone(&patch);
+    let remove_query = Function::new(ctx.clone(), move |name: String| {
+        if let Ok(mut p) = sink.lock() {
+            let name = clean(name);
+            if !name.is_empty() && p.removed_query.len() < MAX_ENTRIES {
+                p.query.remove(&name);
+                p.removed_query.push(name);
+            }
+        }
+    })
+    .map_err(|e| format!("could not create relay.removeQueryParam: {e}"))?;
+
+    let sink = Arc::clone(&patch);
+    let set_url = Function::new(ctx.clone(), move |url: String| {
+        if let Ok(mut p) = sink.lock() {
+            p.url = Some(clean(url));
+        }
+    })
+    .map_err(|e| format!("could not create relay.setUrl: {e}"))?;
+
+    let sink = Arc::clone(&patch);
+    let set_method = Function::new(ctx.clone(), move |method: String| {
+        if let Ok(mut p) = sink.lock() {
+            p.method = Some(clean(method).to_ascii_uppercase());
+        }
+    })
+    .map_err(|e| format!("could not create relay.setMethod: {e}"))?;
+
+    let sink = Arc::clone(&patch);
+    let set_body = Function::new(ctx.clone(), move |body: String| {
+        if let Ok(mut p) = sink.lock() {
+            p.body = Some(body);
+        }
+    })
+    .map_err(|e| format!("could not create relay.setBody: {e}"))?;
+
+    relay
+        .set("setHeader", set_header)
+        .and_then(|()| relay.set("removeHeader", remove_header))
+        .and_then(|()| relay.set("setQueryParam", set_query))
+        .and_then(|()| relay.set("removeQueryParam", remove_query))
+        .and_then(|()| relay.set("setUrl", set_url))
+        .and_then(|()| relay.set("setMethod", set_method))
+        .and_then(|()| relay.set("setBody", set_body))
+        .map_err(|e| format!("could not install the request API: {e}"))
 }
 
 fn install_data<'js>(

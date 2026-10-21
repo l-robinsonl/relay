@@ -35,6 +35,14 @@ pub struct Binding {
     pub scope: Scope,
     /// True when the value came from the OS credential store.
     pub secret: bool,
+    /// True when the value is substituted as-is, without being expanded.
+    ///
+    /// Only a pre-request script's variables are literal. A script may not
+    /// read a secret, so it must not be able to set a variable whose value
+    /// is a reference to one and have resolution fetch it on the script's
+    /// behalf — that would be a way round the rule rather than an
+    /// exception to it.
+    pub literal: bool,
 }
 
 /// A layered set of variable bindings.
@@ -67,6 +75,7 @@ impl VariableContext {
                         value: variable.value.clone(),
                         scope,
                         secret: variable.secret,
+                        literal: false,
                     },
                 );
             }
@@ -81,11 +90,12 @@ impl VariableContext {
                 value: value.into(),
                 scope: Scope::Environment,
                 secret: true,
+                literal: false,
             },
         );
     }
 
-    /// Sets a value at request scope, as a script would.
+    /// Sets a value at request scope.
     pub fn set(&mut self, key: &str, value: impl Into<String>) {
         self.bindings.insert(
             key.trim().to_string(),
@@ -93,6 +103,24 @@ impl VariableContext {
                 value: value.into(),
                 scope: Scope::Request,
                 secret: false,
+                literal: false,
+            },
+        );
+    }
+
+    /// Sets a value a pre-request script produced.
+    ///
+    /// Substituted verbatim: whatever the script wrote is what goes into
+    /// the request, with no second pass that might turn `{{apiSecret}}`
+    /// into the secret the script is not allowed to read.
+    pub fn set_literal(&mut self, key: &str, value: impl Into<String>) {
+        self.bindings.insert(
+            key.trim().to_string(),
+            Binding {
+                value: value.into(),
+                scope: Scope::Request,
+                secret: false,
+                literal: true,
             },
         );
     }
@@ -180,7 +208,10 @@ fn expand(
 
                 match context.get(name) {
                     Some(binding) => {
-                        if visiting.contains(name) {
+                        if binding.literal {
+                            // Substituted as written. See `set_literal`.
+                            out.push_str(&binding.value);
+                        } else if visiting.contains(name) {
                             // A cycle. Leave the reference in place so the
                             // user can see which variable is self-referential.
                             out.push_str(&template[i..i + 4 + end]);

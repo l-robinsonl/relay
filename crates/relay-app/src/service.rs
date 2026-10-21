@@ -39,6 +39,10 @@ pub struct SendOutcome {
     /// What the post-response script reported, if there was one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tests: Option<ScriptOutcome>,
+    /// What the pre-request script reported, if there was one. Carries
+    /// its console output, so an author can see what it did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pre_request: Option<ScriptOutcome>,
 }
 
 /// What the Auth tab knows about a held OAuth token.
@@ -84,6 +88,33 @@ impl std::fmt::Debug for RelayService {
             .field("tokens", &self.tokens)
             .finish()
     }
+}
+
+/// The variables a script is allowed to see.
+///
+/// Secret values are excluded by the `!v.secret` filter, which is the
+/// whole of the rule: a script never receives one, so it cannot read,
+/// print or forward a credential.
+fn readable_variables(input: &ResolutionInput<'_>) -> std::collections::BTreeMap<String, String> {
+    let mut variables = std::collections::BTreeMap::new();
+
+    let mut absorb = |list: &[relay_models::Variable]| {
+        for variable in list.iter().filter(|v| v.enabled && !v.secret) {
+            variables.insert(variable.key.clone(), variable.value.clone());
+        }
+    };
+
+    if let Some(workspace) = input.workspace {
+        absorb(&workspace.variables);
+    }
+    for collection in &input.folder_chain {
+        absorb(&collection.variables);
+    }
+    if let Some(environment) = input.environment {
+        absorb(&environment.variables);
+    }
+
+    variables
 }
 
 impl RelayService {
@@ -433,6 +464,19 @@ impl RelayService {
         environment: Option<EnvironmentId>,
         progress: Arc<dyn ProgressSink>,
     ) -> RelayResult<HttpExchange> {
+        self.send(execution_id, doc, environment, progress)
+            .await
+            .map(|(exchange, _)| exchange)
+    }
+
+    /// The send itself, keeping what the pre-request script reported.
+    async fn send(
+        &self,
+        execution_id: relay_models::ExecutionId,
+        doc: RequestDoc,
+        environment: Option<EnvironmentId>,
+        progress: Arc<dyn ProgressSink>,
+    ) -> RelayResult<(HttpExchange, Option<ScriptOutcome>)> {
         let context_data = self.load_scope(&doc, environment.clone()).await?;
         let input = context_data.as_input();
         let mut context = build_context(&input);
@@ -447,6 +491,12 @@ impl RelayService {
                 }
             }
         }
+
+        // The pre-request script runs here: after secrets are in the
+        // context, so it sees the request as it would actually be sent,
+        // and before the missing-variable check, so a variable it
+        // provides counts as provided.
+        let pre_request = self.run_pre_request(&doc, &input, &mut context).await?;
 
         let resolution = resolve(&doc, &input, &context);
 
@@ -471,6 +521,12 @@ impl RelayService {
 
         let mut spec = resolution.spec;
 
+        // After resolution, so the values a script wrote are used exactly
+        // as written. See `RequestPatch`.
+        if let Some(outcome) = &pre_request {
+            spec.apply_patch(&outcome.request_patch);
+        }
+
         // The token goes onto the spec that is about to be sent, never
         // onto the stored document: `spec` is a resolution of `doc` and
         // is dropped when this call returns, so no access token can
@@ -481,7 +537,56 @@ impl RelayService {
 
         self.record_history(&doc, &spec, &exchange).await;
 
-        Ok(exchange)
+        Ok((exchange, pre_request))
+    }
+
+    /// Runs the pre-request script, if there is one.
+    ///
+    /// Variables it sets are added to the context for this send alone.
+    /// They are deliberately not written back as workspace variables:
+    /// this script runs on every send, and persisting a nonce each time
+    /// would churn the workspace and push a revision per request. A
+    /// value worth keeping is captured by the post-response script of
+    /// whichever request produced it.
+    async fn run_pre_request(
+        &self,
+        doc: &RequestDoc,
+        input: &ResolutionInput<'_>,
+        context: &mut relay_core::interpolate::VariableContext,
+    ) -> RelayResult<Option<ScriptOutcome>> {
+        let source = doc.scripts.pre_request.clone();
+        if source.trim().is_empty() {
+            return Ok(None);
+        }
+
+        // Resolved first, so the script reads real values rather than
+        // `{{baseUrl}}`. Redacted on the way in, so it cannot read a
+        // credential that is already on the request.
+        let preview = resolve(doc, input, context);
+        let variables = readable_variables(input);
+
+        let outcome = ScriptEngine::new().run_pre_request(
+            &source,
+            Some(&ScriptRequest::from_spec(&preview.spec)),
+            &variables,
+        );
+
+        // A pre-request script usually exists to produce something the
+        // request needs — a signature, a timestamp, a token. Sending
+        // anyway would turn a clear script error into a puzzling 401.
+        if let Some(error) = &outcome.error {
+            return Err(RelayError::new(
+                ErrorKind::Invalid,
+                format!("the pre-request script failed: {error}"),
+            )
+            .with_detail("The request was not sent.".to_string()));
+        }
+
+        for (key, value) in &outcome.variables {
+            context.set_literal(key, value);
+        }
+
+        Ok(Some(outcome))
     }
 
     /// Sends a request and runs its tests against the response.
@@ -497,14 +602,15 @@ impl RelayService {
         progress: Arc<dyn ProgressSink>,
     ) -> RelayResult<SendOutcome> {
         let script = doc.scripts.post_response.clone();
-        let exchange = self
-            .request_send(execution_id, doc.clone(), environment.clone(), progress)
+        let (exchange, pre_request) = self
+            .send(execution_id, doc.clone(), environment.clone(), progress)
             .await?;
 
         if script.trim().is_empty() {
             return Ok(SendOutcome {
                 exchange,
                 tests: None,
+                pre_request,
             });
         }
 
@@ -518,6 +624,7 @@ impl RelayService {
             return Ok(SendOutcome {
                 exchange,
                 tests: None,
+                pre_request,
             });
         };
 
@@ -542,6 +649,7 @@ impl RelayService {
         Ok(SendOutcome {
             exchange,
             tests: Some(outcome),
+            pre_request,
         })
     }
 
@@ -555,25 +663,7 @@ impl RelayService {
             return Default::default();
         };
 
-        let mut variables = std::collections::BTreeMap::new();
-
-        let mut absorb = |list: &[relay_models::Variable]| {
-            for variable in list.iter().filter(|v| v.enabled && !v.secret) {
-                variables.insert(variable.key.clone(), variable.value.clone());
-            }
-        };
-
-        if let Some(workspace) = &scope.workspace {
-            absorb(&workspace.variables);
-        }
-        for collection in &scope.folder_chain {
-            absorb(&collection.variables);
-        }
-        if let Some(environment) = &scope.environment {
-            absorb(&environment.variables);
-        }
-
-        variables
+        readable_variables(&scope.as_input())
     }
 
     /// Writes variables a script set back to the workspace.

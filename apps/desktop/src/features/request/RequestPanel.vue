@@ -3,10 +3,10 @@ import { computed, ref, watch } from 'vue'
 import { AlertTriangle, Save } from '@lucide/vue'
 import type { Tab, RequestSection } from '@/types/ui'
 import AuthEditor from '@/features/request/AuthEditor.vue'
+import ScriptsEditor from '@/features/request/ScriptsEditor.vue'
 import BodyEditor from '@/features/request/BodyEditor.vue'
 import SettingsEditor from '@/features/request/SettingsEditor.vue'
 import UrlBar from '@/features/request/UrlBar.vue'
-import CodeEditor from '@/components/ui/CodeEditor.vue'
 import KeyValueEditor from '@/components/ui/KeyValueEditor.vue'
 import { api } from '@/services/ipc'
 import { useTabsStore } from '@/stores/tabs'
@@ -173,30 +173,11 @@ watch(
         @update:model-value="tabs.update(tab.id, { auth: $event })"
       />
 
-      <div v-else-if="tab.activeSection === 'scripts'" class="flex h-full flex-col">
-        <p class="shrink-0 border-b border-subtle px-3 py-1.5 text-xxs uppercase
-                  tracking-wide text-muted">
-          Tests — run after the response arrives
-        </p>
-        <CodeEditor
-          class="min-h-0 flex-1"
-          language="javascript"
-          :model-value="tab.doc.scripts.postResponse"
-          placeholder="expect(response.status).toBe(200)"
-          @update:model-value="
-            tabs.update(tab.id, {
-              scripts: { ...tab.doc.scripts, postResponse: $event },
-            })
-          "
-        />
-        <p class="shrink-0 border-t border-subtle px-3 py-2 text-xs text-muted">
-          Runs after each response, in a sandbox with no filesystem, network or process
-          access. <code class="font-mono">response</code>,
-          <code class="font-mono">request</code> and
-          <code class="font-mono">relay.getVariable</code> are available; secret values
-          are not. Results appear under Tests.
-        </p>
-      </div>
+      <ScriptsEditor
+        v-else-if="tab.activeSection === 'scripts'"
+        :model-value="tab.doc.scripts"
+        @update:model-value="tabs.update(tab.id, { scripts: $event })"
+      />
 
       <SettingsEditor
         v-else

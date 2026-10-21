@@ -1,6 +1,6 @@
 //! What goes into a script, and what comes back out.
 
-use relay_models::{HttpRequestSpec, HttpResponseData, ResponseBody};
+use relay_models::{HttpRequestSpec, HttpResponseData, RequestPatch, ResponseBody};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
@@ -172,23 +172,21 @@ pub struct ConsoleLine {
 #[ts(export)]
 pub struct ScriptOutcome {
     /// Named test groups, in the order they ran.
-    /// Named groups, in the order they ran.
     pub tests: Vec<TestCase>,
     /// Assertions made outside any test group.
-    /// Assertions made outside any group.
     pub loose_assertions: Vec<Assertion>,
     /// Anything the script printed.
-    /// Anything printed.
     pub console: Vec<ConsoleLine>,
     /// Variables the script set, to be written back by the caller.
-    /// Variables the script asked to set.
     pub variables: std::collections::BTreeMap<String, String>,
+    /// Changes a pre-request script asked to make to the request.
+    #[serde(default, skip_serializing_if = "RequestPatch::is_empty")]
+    pub request_patch: RequestPatch,
     /// Set when the script itself failed — a syntax error, a timeout, or
     /// an exception outside any test.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
     /// How long it ran, in milliseconds.
-    /// How long the run took.
     pub duration_ms: f64,
 }
 

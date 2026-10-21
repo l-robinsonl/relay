@@ -28,13 +28,12 @@ Phases 1–3 complete. Phase 4 mostly. Phase 5 part-done.
 | Import | OpenAPI 3 (JSON+YAML), Postman v2.1 + environments, cURL, Relay exports |
 | Export | portable JSON, copy as cURL |
 | Sync | Axum server, users, membership, revisions, conflicts, WebSocket live updates, client engine |
-| Scripting | QuickJS sandbox, assertions, test results panel |
+| Scripting | QuickJS sandbox, assertions, test results panel, pre-request scripts that may rewrite the request |
 | OAuth 2.0 | authorization code + PKCE via loopback, client credentials, password; in-memory token cache, silent refresh |
 | Packaging | `.deb` / `.rpm` / `.AppImage` build |
 
 | Not built | |
 |---|---|
-| Pre-request scripts | stored and imported; never executed |
 | Client certificate UI | engine supports it, no settings screen |
 | Relay Cloud / billing | designed only (Phases 6–7) |
 | CI | written, never executed — no git remote |
@@ -181,11 +180,20 @@ Quote PSS. Never quote a figure this project did not measure.
 
 ## Next
 
-1. Pre-request scripts — the runtime exists, nothing calls it before send.
-2. Client certificate settings UI.
-3. CI — written at `.github/workflows/ci.yml`, never run.
-4. Phase 6/7 — Relay Cloud on Neon, then Stripe. Billing last, by the
+1. Client certificate settings UI.
+2. CI — written at `.github/workflows/ci.yml`, never run.
+3. Phase 6/7 — Relay Cloud on Neon, then Stripe. Billing last, by the
    user's own sequencing.
+
+**Pre-request scripts, as built.** `ScriptEngine::run_pre_request` returns
+a `RequestPatch` (in `relay-models`, applied by
+`HttpRequestSpec::apply_patch`) rather than handing the script a mutable
+request. The patch is applied *after* resolution and script-set variables
+are bound with `set_literal`, which does not expand — together those two
+stop a script naming `{{apiSecret}}` and having Relay fetch a secret it
+is not allowed to read. Both holes have tests in
+`crates/relay-app/tests/pre_request_scripts.rs`; do not "simplify" either
+one away.
 
 **OAuth, as built.** `relay-http/src/oauth.rs` does the protocol,
 `oauth_redirect.rs` is the one-shot loopback listener, and

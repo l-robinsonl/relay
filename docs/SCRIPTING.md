@@ -1,6 +1,17 @@
 # Scripting
 
-Scripts attached to a request run after its response arrives. They are for
+A request can carry two scripts, written under its **Scripts** tab.
+
+A **pre-request** script runs before the request goes out. It is for
+producing something the request needs: a signature, a timestamp, a nonce.
+
+```javascript
+const stamp = String(Date.now())
+relay.setHeader('X-Timestamp', stamp)
+relay.setHeader('X-Signature', `${request.method}:${request.url}:${stamp}`)
+```
+
+A **post-response** script runs after the response arrives. It is for
 asserting things about what came back, and for capturing a value — a
 token, an id — for the next request to use.
 
@@ -14,6 +25,11 @@ test('it returns the user', () => {
 Results appear under **Tests**, beside the response. A failing assertion
 never fails the request: the response is what you asked for, and the
 verdict on it is separate information.
+
+A pre-request script is different in one respect: if it throws, the
+request is **not** sent. It usually exists to produce something the
+request cannot do without, and sending anyway would turn a clear script
+error into a puzzling 401.
 
 ## The sandbox
 
@@ -141,10 +157,50 @@ error rather than ignored.
 `console.log`, `.info`, `.debug`, `.warn` and `.error` are captured and
 shown under Tests. Objects are rendered as JSON.
 
+## Changing the request
+
+These are available in a pre-request script only. In a post-response
+script they throw, rather than quietly doing nothing to a request that
+has already been sent.
+
+```javascript
+relay.setHeader(name, value)      // adds, or overwrites by name
+relay.removeHeader(name)          // case-insensitive, as HTTP is
+relay.setQueryParam(name, value)
+relay.removeQueryParam(name)
+relay.setUrl(url)
+relay.setMethod(method)
+relay.setBody(text)
+```
+
+`request` holds the request as it currently stands, with its variables
+already resolved — so `request.url` is the URL that will actually be
+requested, not `{{baseUrl}}/users`. The `Authorization` header is
+redacted there, as it is everywhere else: a script may build a credential
+but never read one.
+
+Changes are applied **after** variables are resolved, so what you write
+is what is sent. `relay.setHeader('X-Key', '{{apiSecret}}')` sends the
+literal text `{{apiSecret}}`, not the secret. The same is true of a
+variable a pre-request script sets: its value is substituted as written
+and not expanded again. Both are deliberate. A script is not allowed to
+read a secret, so it must not be able to name one and have Relay fetch it
+on the script's behalf.
+
+### Variables from a pre-request script
+
+```javascript
+relay.setVariable('nonce', crypto.randomUUID())
+```
+
+A variable set here applies to **this send only** and is then forgotten.
+A pre-request script runs on every send, so persisting its output would
+churn the workspace and push a revision per request. To keep a value,
+capture it in the post-response script of whichever request produced it —
+those are written back as ordinary workspace variables.
+
 ## Not supported
 
-- **Pre-request scripts.** The field is stored and imported, but nothing
-  runs it yet.
 - **Modules.** `import` and `require` resolve to nothing.
 - **Timers.** No `setTimeout`; a script runs to completion.
 - **Chaining requests.** A script cannot send one. Capture a value into a

@@ -372,6 +372,117 @@ mod tests {
     use super::*;
     use crate::request::{ApiKeyLocation, ProxyConfig};
 
+    fn patched(patch: RequestPatch) -> HttpRequestSpec {
+        let mut spec = HttpRequestSpec::new(HttpMethod::Get, "https://api.example.com/users");
+        spec.headers = vec![
+            KeyValue::new("Content-Type", "application/json"),
+            KeyValue::new("Accept", "application/json"),
+        ];
+        spec.query_params = vec![KeyValue::new("page", "1")];
+        spec.apply_patch(&patch);
+        spec
+    }
+
+    fn header<'a>(spec: &'a HttpRequestSpec, name: &str) -> Option<&'a KeyValue> {
+        spec.headers
+            .iter()
+            .find(|h| h.key.eq_ignore_ascii_case(name))
+    }
+
+    #[test]
+    fn a_patch_adds_a_header_without_disturbing_the_others() {
+        let spec = patched(RequestPatch {
+            headers: [("X-Signature".to_string(), "abc".to_string())].into(),
+            ..Default::default()
+        });
+
+        assert_eq!(spec.headers.len(), 3);
+        assert_eq!(header(&spec, "X-Signature").unwrap().value, "abc");
+        assert_eq!(header(&spec, "Accept").unwrap().value, "application/json");
+    }
+
+    #[test]
+    fn a_header_is_matched_without_regard_to_case() {
+        // HTTP header names are case-insensitive; a script that writes
+        // `content-type` means the `Content-Type` already on the request,
+        // and sending both would be wrong.
+        let spec = patched(RequestPatch {
+            headers: [("content-type".to_string(), "text/plain".to_string())].into(),
+            ..Default::default()
+        });
+
+        assert_eq!(spec.headers.len(), 2, "a duplicate header was added");
+        let row = header(&spec, "Content-Type").unwrap();
+        assert_eq!(row.value, "text/plain");
+        assert_eq!(row.key, "Content-Type", "the user's spelling was not kept");
+    }
+
+    #[test]
+    fn a_removed_header_goes_whatever_its_case() {
+        let spec = patched(RequestPatch {
+            removed_headers: vec!["ACCEPT".into()],
+            ..Default::default()
+        });
+
+        assert!(header(&spec, "Accept").is_none());
+        assert_eq!(spec.headers.len(), 1);
+    }
+
+    #[test]
+    fn a_disabled_row_the_script_sets_is_turned_back_on() {
+        let mut spec = HttpRequestSpec::new(HttpMethod::Get, "https://api.example.com");
+        spec.headers = vec![KeyValue {
+            enabled: false,
+            ..KeyValue::new("X-Trace", "off")
+        }];
+
+        spec.apply_patch(&RequestPatch {
+            headers: [("X-Trace".to_string(), "on".to_string())].into(),
+            ..Default::default()
+        });
+
+        assert!(
+            spec.headers[0].enabled,
+            "the script set it, so it should be sent"
+        );
+        assert_eq!(spec.headers[0].value, "on");
+    }
+
+    #[test]
+    fn query_parameter_names_are_case_sensitive() {
+        // Unlike headers: `?Page=2` and `?page=2` are different
+        // parameters, and merging them would silently change the request.
+        let spec = patched(RequestPatch {
+            query: [("Page".to_string(), "2".to_string())].into(),
+            ..Default::default()
+        });
+
+        assert_eq!(spec.query_params.len(), 2);
+    }
+
+    #[test]
+    fn the_method_url_and_body_are_replaced() {
+        let spec = patched(RequestPatch {
+            method: Some("POST".into()),
+            url: Some("https://api.example.com/v2/users".into()),
+            body: Some("hello".into()),
+            ..Default::default()
+        });
+
+        assert_eq!(spec.method, HttpMethod::Post);
+        assert_eq!(spec.url, "https://api.example.com/v2/users");
+        assert!(matches!(spec.body, RequestBody::Text { ref text } if text == "hello"));
+    }
+
+    #[test]
+    fn an_empty_patch_changes_nothing() {
+        let before = patched(RequestPatch::default());
+        assert_eq!(before.headers.len(), 2);
+        assert_eq!(before.query_params.len(), 1);
+        assert_eq!(before.method, HttpMethod::Get);
+        assert!(RequestPatch::default().is_empty());
+    }
+
     fn spec_with_secrets() -> HttpRequestSpec {
         let mut spec = HttpRequestSpec::new(HttpMethod::Get, "https://api.example.com");
         spec.headers = vec![
@@ -449,5 +560,117 @@ mod tests {
         };
         let json = serde_json::to_value(&ex).unwrap();
         assert_eq!(json["outcome"], "cancelled");
+    }
+}
+
+/// What a pre-request script asked to change about the request.
+///
+/// A patch rather than a mutable handle: the script states intent, and
+/// Rust decides what that means and what is allowed. It is applied after
+/// variables are resolved, so the values are used exactly as written —
+/// a script cannot smuggle `{{apiSecret}}` into a header and have
+/// resolution fetch a credential it may not read.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct RequestPatch {
+    /// Replaces the method.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub method: Option<String>,
+    /// Replaces the URL.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    /// Replaces the body with this text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
+    /// Headers to add or overwrite, keyed by name.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub headers: std::collections::BTreeMap<String, String>,
+    /// Header names to drop.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub removed_headers: Vec<String>,
+    /// Query parameters to add or overwrite.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub query: std::collections::BTreeMap<String, String>,
+    /// Query parameter names to drop.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub removed_query: Vec<String>,
+}
+
+impl RequestPatch {
+    /// True when the script asked for no change at all.
+    pub fn is_empty(&self) -> bool {
+        self.method.is_none()
+            && self.url.is_none()
+            && self.body.is_none()
+            && self.headers.is_empty()
+            && self.removed_headers.is_empty()
+            && self.query.is_empty()
+            && self.removed_query.is_empty()
+    }
+}
+
+impl HttpRequestSpec {
+    /// Applies what a pre-request script asked for.
+    ///
+    /// Header names match case-insensitively, because HTTP header names
+    /// are case-insensitive and a script that writes `content-type`
+    /// means the `Content-Type` already on the request.
+    pub fn apply_patch(&mut self, patch: &RequestPatch) {
+        if let Some(method) = &patch.method {
+            self.method = HttpMethod::from(method.as_str());
+        }
+        if let Some(url) = &patch.url {
+            self.url = url.clone();
+        }
+        if let Some(body) = &patch.body {
+            self.body = RequestBody::Text { text: body.clone() };
+        }
+
+        apply_rows(
+            &mut self.headers,
+            &patch.headers,
+            &patch.removed_headers,
+            true,
+        );
+        // Query parameter names are case-sensitive, unlike header names.
+        apply_rows(
+            &mut self.query_params,
+            &patch.query,
+            &patch.removed_query,
+            false,
+        );
+    }
+}
+
+/// Merges a script's additions and removals into a key/value list.
+fn apply_rows(
+    rows: &mut Vec<KeyValue>,
+    set: &std::collections::BTreeMap<String, String>,
+    removed: &[String],
+    ignore_case: bool,
+) {
+    let matches = |a: &str, b: &str| {
+        if ignore_case {
+            a.eq_ignore_ascii_case(b)
+        } else {
+            a == b
+        }
+    };
+
+    for name in removed {
+        rows.retain(|row| !matches(&row.key, name));
+    }
+
+    for (name, value) in set {
+        // An existing row is overwritten in place, keeping its position
+        // and the spelling the user chose, so the request the script
+        // produced still looks like the one they wrote.
+        if let Some(existing) = rows.iter_mut().find(|row| matches(&row.key, name)) {
+            existing.value = value.clone();
+            existing.enabled = true;
+        } else {
+            rows.push(KeyValue::new(name, value));
+        }
     }
 }

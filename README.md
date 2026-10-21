@@ -98,10 +98,11 @@ anything is written, and the whole thing lands in one transaction or not at
 all. Copy any request back out as `curl`, or export an entire workspace as
 portable JSON.
 
-**Tests** — assertions run after each response, in a sandbox with no
-filesystem, network or process access and hard limits on time and memory.
-A script can read the response and non-secret variables, and capture a
-value for the next request; it cannot read a credential.
+**Scripts** — a pre-request script can rewrite the request before it goes
+out, to sign it or stamp it; a post-response script asserts against what
+came back and captures a value for the next request. Both run in a sandbox
+with no filesystem, network or process access and hard limits on time and
+memory, and neither can read a credential.
 [How it works](docs/SCRIPTING.md).
 
 **Interface** — a designed dark theme and an equally designed light one,
@@ -120,8 +121,6 @@ the strength of a timestamp. Secret values never leave your device.
 Stated plainly, because a README that implies otherwise wastes your time:
 
 - **Relay Cloud and billing.** Designed, not built.
-- **Pre-request scripts.** The field is stored and imported, but only
-  post-response scripts run.
 - **Client certificates.** The engine presents them; there is no settings
   screen to configure one yet.
 - **The OAuth 2.0 implicit grant.** Deliberately not implemented: it

@@ -28,8 +28,8 @@ pub use common::{KeyValue, Revision, Timestamp};
 pub use error::{ErrorKind, RelayError, RelayResult};
 pub use http::{
     ExecutionPhase, ExecutionProgress, HistoryEntry, HttpExchange, HttpRequestSpec,
-    HttpResponseData, REDACTED, RedirectHop, ResponseBody, ResponseCookie, Timings, TransportError,
-    TransportErrorKind,
+    HttpResponseData, REDACTED, RedirectHop, RequestPatch, ResponseBody, ResponseCookie, Timings,
+    TransportError, TransportErrorKind,
 };
 pub use ids::{CollectionId, EnvironmentId, ExecutionId, HistoryId, RequestId, TabId, WorkspaceId};
 pub use request::{

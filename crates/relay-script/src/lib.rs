@@ -22,7 +22,8 @@
 mod runtime;
 mod value;
 
-pub use runtime::{ScriptEngine, ScriptLimits};
+pub use relay_models::RequestPatch;
+pub use runtime::{ScriptEngine, ScriptLimits, ScriptPhase};
 pub use value::{
     ConsoleLevel, ConsoleLine, ScriptOutcome, ScriptRequest, ScriptResponse, TestCase,
 };
