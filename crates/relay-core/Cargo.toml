@@ -11,6 +11,8 @@ description = "Relay domain logic: variable resolution, request assembly, import
 relay-models.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+# serde_yaml is deprecated upstream; serde_norway is its maintained fork.
+serde_norway = "0.9"
 thiserror.workspace = true
 tracing.workspace = true
 ts-rs.workspace = true

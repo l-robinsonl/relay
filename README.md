@@ -32,6 +32,11 @@ other way round:
 - **Secrets stay put.** Values marked secret are never written to the database,
   never exported, and never synchronised — by construction, not by filter.
 - **No telemetry.** None. There is no analytics code to disable.
+- **Small, because it ships no browser.** Relay uses the webview your
+  operating system already has rather than bundling its own Chromium.
+  Measured idle on one machine: 251 MB against Slack's 501 MB, and a
+  7.3 MB `.deb` against the ~100 MB an Electron installer starts at.
+  [The numbers, and their caveats](docs/FOOTPRINT.md).
 
 ## Install
 
