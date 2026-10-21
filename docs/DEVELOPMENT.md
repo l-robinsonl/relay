@@ -40,8 +40,8 @@ sudo pacman -S --needed webkit2gtk-4.1 gtk3 libayatana-appindicator librsvg \
 ```
 
 **None of this is needed to work on the Rust crates or the frontend** — only
-to build and run the desktop shell itself. `cargo test --workspace --exclude
-relay-desktop` and `npm test` both run on a bare machine.
+to build and run the desktop shell itself. On a machine without them,
+`cargo test --workspace --exclude relay-desktop` and `npm test` still run.
 
 Run `./scripts/check-deps.sh` to see what is missing.
 

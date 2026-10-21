@@ -26,8 +26,8 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      # The library crates do not need the desktop shell's system
-      # dependencies, so they are tested on every platform without them.
+      # This job installs no GTK/WebKit, so it covers the library crates
+      # only. The desktop job below builds the shell with those present.
       - name: Test
         run: cargo test --workspace --exclude relay-desktop --all-features
 
