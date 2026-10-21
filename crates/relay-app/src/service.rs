@@ -21,6 +21,7 @@ use relay_storage::{
 };
 
 use crate::secrets::SecretStore;
+use crate::sync::{Resolution, SyncClient, SyncEngine, SyncOutcome, initial_state};
 
 /// How many history entries are kept per workspace.
 const HISTORY_LIMIT: u32 = 1000;
@@ -670,6 +671,152 @@ impl RelayService {
         Ok(relay_core::export_curl(&preview.spec))
     }
 
+    // --- synchronisation --------------------------------------------------
+
+    /// A sync engine over this service's database and credential store.
+    pub fn sync_engine(&self) -> SyncEngine {
+        SyncEngine::new(self.db.clone(), Arc::clone(&self.secrets))
+    }
+
+    /// Checks a server is reachable and speaks a protocol we understand.
+    pub async fn sync_probe(&self, server_url: String) -> RelayResult<crate::sync::ServerHealth> {
+        SyncClient::new(server_url)?.health().await
+    }
+
+    /// Connects a workspace to a server, signing in and creating it there.
+    ///
+    /// `join` adopts a workspace that already exists on the server rather
+    /// than publishing the local one, which is what a second device does.
+    pub async fn sync_connect(
+        &self,
+        workspace: WorkspaceId,
+        server_url: String,
+        email: String,
+        password: String,
+        join: bool,
+    ) -> RelayResult<SyncStatus> {
+        let client = SyncClient::new(&server_url)?;
+        client.health().await?;
+
+        let login = client.login(&email, &password).await?;
+        let engine = self.sync_engine();
+        engine.set_token(&workspace, &login.token)?;
+
+        if join {
+            engine.prepare_join(&workspace).await?;
+        } else {
+            let name = {
+                let id = workspace.clone();
+                self.db
+                    .call(move |c| WorkspaceRepo::get(c, &id))
+                    .await?
+                    .name
+            };
+            client
+                .create_workspace(&login.token, workspace.as_str(), &name)
+                .await?;
+        }
+
+        let state = initial_state(&workspace, &server_url, None, &login.user);
+        self.db
+            .call(move |c| relay_storage::SyncRepo::set_state(c, &state))
+            .await?;
+
+        self.sync_status(workspace).await
+    }
+
+    /// Runs one synchronisation pass.
+    pub async fn sync_now(&self, workspace: WorkspaceId) -> RelayResult<SyncOutcome> {
+        self.sync_engine().sync(workspace).await
+    }
+
+    /// Stops a workspace synchronising. Local data is untouched.
+    pub async fn sync_disconnect(&self, workspace: WorkspaceId) -> RelayResult<()> {
+        let engine = self.sync_engine();
+        let _ = engine.clear_token(&workspace);
+
+        let id = workspace.clone();
+        self.db
+            .call(move |c| relay_storage::SyncRepo::disconnect(c, &id))
+            .await?;
+        Ok(())
+    }
+
+    /// How a workspace's synchronisation stands.
+    pub async fn sync_status(&self, workspace: WorkspaceId) -> RelayResult<SyncStatus> {
+        let id = workspace.clone();
+        let state = self
+            .db
+            .call(move |c| relay_storage::SyncRepo::state(c, &id))
+            .await?;
+
+        let Some(state) = state else {
+            return Ok(SyncStatus::default());
+        };
+
+        let id = workspace.clone();
+        let conflicts = self
+            .db
+            .call(move |c| relay_storage::SyncRepo::open_conflicts(c, &id))
+            .await?
+            .len();
+
+        let id = workspace.clone();
+        let pending = self
+            .db
+            .call(move |c| relay_storage::SyncRepo::pending_changes(c, &id))
+            .await?
+            .len();
+
+        Ok(SyncStatus {
+            connected: true,
+            server_url: Some(state.server_url),
+            user_email: state.user_email,
+            signed_in: self.sync_engine().token(&workspace).is_some(),
+            last_pulled_seq: state.last_pulled_seq,
+            last_sync_at: state.last_sync_at,
+            last_error: state.last_error,
+            pending_changes: pending,
+            open_conflicts: conflicts,
+        })
+    }
+
+    /// Conflicts awaiting a decision.
+    pub async fn sync_conflicts(&self, workspace: WorkspaceId) -> RelayResult<Vec<ConflictView>> {
+        let conflicts = self
+            .db
+            .call(move |c| relay_storage::SyncRepo::open_conflicts(c, &workspace))
+            .await?;
+
+        Ok(conflicts
+            .into_iter()
+            .map(|c| ConflictView {
+                id: c.id,
+                entity: c.entity.as_str().to_string(),
+                entity_id: c.entity_id,
+                name: name_of(&c.local).or_else(|| c.server.as_ref().and_then(name_of)),
+                local: c.local,
+                server: c.server,
+                server_deleted: c.server_deleted,
+                detected_at: c.detected_at,
+            })
+            .collect())
+    }
+
+    /// Applies the user's decision about a conflict.
+    pub async fn sync_resolve(&self, conflict_id: String, keep_local: bool) -> RelayResult<()> {
+        self.sync_engine()
+            .resolve(
+                conflict_id,
+                if keep_local {
+                    Resolution::KeepLocal
+                } else {
+                    Resolution::KeepServer
+                },
+            )
+            .await
+    }
+
     // --- app state ----------------------------------------------------------
 
     /// Reads a UI state value.
@@ -699,6 +846,60 @@ impl RelayService {
         }
         self.ensure_default_workspace().await
     }
+}
+
+/// How a workspace's synchronisation stands, for the status indicator.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncStatus {
+    /// False when the workspace is purely local.
+    pub connected: bool,
+    /// Where it synchronises.
+    pub server_url: Option<String>,
+    /// Who is signed in there.
+    pub user_email: Option<String>,
+    /// False when the stored token has gone and the user must sign in again.
+    pub signed_in: bool,
+    /// The highest revision applied.
+    pub last_pulled_seq: i64,
+    /// When synchronisation last succeeded.
+    pub last_sync_at: Option<Timestamp>,
+    /// Why it last failed.
+    pub last_error: Option<String>,
+    /// Local changes waiting to upload.
+    pub pending_changes: usize,
+    /// Disagreements awaiting a decision.
+    pub open_conflicts: usize,
+}
+
+/// A conflict as the resolution UI shows it.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConflictView {
+    /// The conflict's id, passed back to resolve it.
+    pub id: String,
+    /// Which kind of object, e.g. `request`.
+    pub entity: String,
+    /// Which object.
+    pub entity_id: String,
+    /// A readable name, when either side has one.
+    pub name: Option<String>,
+    /// The local version.
+    pub local: serde_json::Value,
+    /// The server's version. `None` when the server deleted it.
+    pub server: Option<serde_json::Value>,
+    /// True when the server's side is a deletion.
+    pub server_deleted: bool,
+    /// When the disagreement was noticed.
+    pub detected_at: Timestamp,
+}
+
+/// Pulls a display name out of a stored document, if it has one.
+fn name_of(value: &serde_json::Value) -> Option<String> {
+    value
+        .get("name")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned)
 }
 
 /// Owned scope data, borrowed into a [`ResolutionInput`].

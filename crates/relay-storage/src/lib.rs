@@ -16,6 +16,7 @@ mod db;
 mod error;
 pub mod migrations;
 mod repo;
+mod sync_repo;
 
 pub use db::Database;
 pub use error::{StorageError, StorageResult};
@@ -23,6 +24,7 @@ pub use repo::{
     AppStateRepo, CollectionRepo, EnvironmentRepo, HistoryRepo, RequestRepo, TreeRepo,
     WorkspaceRepo,
 };
+pub use sync_repo::{OutboxEntry, PendingChange, StoredConflict, SyncEntity, SyncRepo, SyncState};
 
 /// Keys used in the `app_state` table.
 pub mod state_keys {

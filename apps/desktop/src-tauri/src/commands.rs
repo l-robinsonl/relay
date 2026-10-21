@@ -10,6 +10,8 @@
 
 use std::sync::Arc;
 
+use relay_app::service::{ConflictView, SyncStatus};
+use relay_app::sync::{ServerHealth, SyncOutcome};
 use relay_app::{RelayService, ResolvedPreview};
 use relay_core::import::ImportReport;
 use relay_models::{
@@ -395,6 +397,78 @@ pub async fn export_curl(
     environment_id: Option<EnvironmentId>,
 ) -> RelayResult<String> {
     service.export_curl(doc, environment_id).await
+}
+
+// --- synchronisation -------------------------------------------------------
+
+/// Checks a server is reachable and speaks a protocol we understand.
+#[tauri::command]
+pub async fn sync_probe(
+    service: State<'_, RelayService>,
+    server_url: String,
+) -> RelayResult<ServerHealth> {
+    service.sync_probe(server_url).await
+}
+
+/// Connects a workspace to a server and signs in.
+#[tauri::command]
+pub async fn sync_connect(
+    service: State<'_, RelayService>,
+    workspace_id: WorkspaceId,
+    server_url: String,
+    email: String,
+    password: String,
+    join: bool,
+) -> RelayResult<SyncStatus> {
+    service
+        .sync_connect(workspace_id, server_url, email, password, join)
+        .await
+}
+
+/// Runs one synchronisation pass.
+#[tauri::command]
+pub async fn sync_now(
+    service: State<'_, RelayService>,
+    workspace_id: WorkspaceId,
+) -> RelayResult<SyncOutcome> {
+    service.sync_now(workspace_id).await
+}
+
+/// How a workspace's synchronisation stands.
+#[tauri::command]
+pub async fn sync_status(
+    service: State<'_, RelayService>,
+    workspace_id: WorkspaceId,
+) -> RelayResult<SyncStatus> {
+    service.sync_status(workspace_id).await
+}
+
+/// Stops a workspace synchronising, leaving its local data alone.
+#[tauri::command]
+pub async fn sync_disconnect(
+    service: State<'_, RelayService>,
+    workspace_id: WorkspaceId,
+) -> RelayResult<()> {
+    service.sync_disconnect(workspace_id).await
+}
+
+/// Conflicts awaiting a decision.
+#[tauri::command]
+pub async fn sync_conflicts(
+    service: State<'_, RelayService>,
+    workspace_id: WorkspaceId,
+) -> RelayResult<Vec<ConflictView>> {
+    service.sync_conflicts(workspace_id).await
+}
+
+/// Applies the user's decision about a conflict.
+#[tauri::command]
+pub async fn sync_resolve(
+    service: State<'_, RelayService>,
+    conflict_id: String,
+    keep_local: bool,
+) -> RelayResult<()> {
+    service.sync_resolve(conflict_id, keep_local).await
 }
 
 // --- application state -----------------------------------------------------

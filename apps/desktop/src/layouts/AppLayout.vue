@@ -13,7 +13,10 @@ import type { UnlistenFn } from '@tauri-apps/api/event'
 import AppSidebar from '@/features/workspace/AppSidebar.vue'
 import CommandPalette, { type Command } from '@/features/command-palette/CommandPalette.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import ConflictPanel from '@/features/sync/ConflictPanel.vue'
 import ImportDialog from '@/features/import-export/ImportDialog.vue'
+import SyncIndicator from '@/features/sync/SyncIndicator.vue'
+import SyncSettings from '@/features/sync/SyncSettings.vue'
 import RequestPanel from '@/features/request/RequestPanel.vue'
 import ResponsePanel from '@/features/response/ResponsePanel.vue'
 import SplitPane from '@/components/ui/SplitPane.vue'
@@ -22,6 +25,7 @@ import ToastHost from '@/components/ui/ToastHost.vue'
 import { api } from '@/services/ipc'
 import { describeShortcut, useShortcuts, type Shortcut } from '@/composables/useShortcuts'
 import { useSettingsStore } from '@/stores/settings'
+import { useSyncStore } from '@/stores/sync'
 import { useTabsStore } from '@/stores/tabs'
 import { useToastStore } from '@/stores/toast'
 import { useWorkspaceStore } from '@/stores/workspace'
@@ -29,10 +33,13 @@ import { useWorkspaceStore } from '@/stores/workspace'
 const workspace = useWorkspaceStore()
 const tabs = useTabsStore()
 const settings = useSettingsStore()
+const sync = useSyncStore()
 const toasts = useToastStore()
 
 const paletteOpen = ref(false)
 const importOpen = ref(false)
+const syncSettingsOpen = ref(false)
+const conflictsOpen = ref(false)
 let unlistenProgress: UnlistenFn | undefined
 
 /** Pastes a cURL command from the clipboard into a new tab. */
@@ -161,6 +168,21 @@ const shortcuts = computed<Shortcut[]>(() => [
     description: 'Export this workspace',
     handler: exportWorkspace,
   },
+  {
+    key: 'r',
+    mod: true,
+    shift: true,
+    allowInInput: true,
+    description: 'Sync this workspace now',
+    handler: () => void sync.syncNow(),
+  },
+  {
+    key: ',',
+    mod: true,
+    allowInInput: true,
+    description: 'Synchronisation settings',
+    handler: () => (syncSettingsOpen.value = true),
+  },
 ])
 
 useShortcuts(() => shortcuts.value)
@@ -213,6 +235,8 @@ onMounted(async () => {
   await workspace.initialise()
   unlistenProgress = await tabs.watchProgress()
 
+  await sync.refresh()
+
   // Open something rather than greeting the user with a blank editor.
   if (!tabs.tabs.length) tabs.openDraft()
 })
@@ -250,6 +274,10 @@ onBeforeUnmount(() => unlistenProgress?.())
       </button>
 
       <div class="ml-auto flex items-center gap-1">
+        <SyncIndicator
+          @open-settings="syncSettingsOpen = true"
+          @open-conflicts="conflictsOpen = true"
+        />
         <button
           type="button"
           class="btn btn-ghost p-1.5"
@@ -326,6 +354,8 @@ onBeforeUnmount(() => unlistenProgress?.())
       @close="paletteOpen = false"
     />
     <ImportDialog :open="importOpen" @close="importOpen = false" />
+    <SyncSettings :open="syncSettingsOpen" @close="syncSettingsOpen = false" />
+    <ConflictPanel :open="conflictsOpen" @close="conflictsOpen = false" />
     <ToastHost />
   </div>
 </template>

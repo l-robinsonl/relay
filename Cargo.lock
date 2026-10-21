@@ -3441,11 +3441,16 @@ dependencies = [
  "relay-core",
  "relay-http",
  "relay-models",
+ "relay-server",
  "relay-storage",
+ "relay-sync",
+ "reqwest",
+ "rusqlite",
  "serde",
  "serde_json",
  "tokio",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -3554,6 +3559,7 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -3600,6 +3606,7 @@ dependencies = [
  "rustls-platform-verifier",
  "serde",
  "serde_json",
+ "serde_urlencoded",
  "sync_wrapper",
  "tokio",
  "tokio-rustls",

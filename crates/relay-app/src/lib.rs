@@ -10,7 +10,9 @@
 
 pub mod paths;
 pub mod secrets;
-mod service;
+pub mod service;
+pub mod sync;
 
 pub use secrets::{MemorySecretStore, SecretStore};
 pub use service::{RelayService, ResolvedPreview};
+pub use sync::{Resolution, SyncClient, SyncEngine, SyncOutcome};

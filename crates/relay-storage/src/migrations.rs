@@ -19,11 +19,18 @@ pub struct Migration {
 }
 
 /// Every migration, in order.
-pub const MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    name: "initial_schema",
-    sql: include_str!("../migrations/0001_initial.sql"),
-}];
+pub const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        name: "initial_schema",
+        sql: include_str!("../migrations/0001_initial.sql"),
+    },
+    Migration {
+        version: 2,
+        name: "sync_state",
+        sql: include_str!("../migrations/0002_sync.sql"),
+    },
+];
 
 /// The schema version this build expects.
 pub fn target_version() -> i64 {
@@ -156,6 +163,7 @@ mod tests {
             "app_state",
             "sync_state",
             "outbox",
+            "conflicts",
         ] {
             let count: i64 = conn
                 .query_row(

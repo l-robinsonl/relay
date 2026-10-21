@@ -12,6 +12,7 @@ relay-models.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+uuid.workspace = true
 tracing.workspace = true
 tokio = { workspace = true, features = ["rt", "sync"] }
 # Pinned to 0.39 rather than 0.40: 0.40 requires libsqlite3-sys 0.38, while

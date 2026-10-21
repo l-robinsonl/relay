@@ -8,10 +8,11 @@ machine. If a team wants to share them, they can run one small server
 themselves — or pay us a small amount to run it for them. Nothing about the
 desktop application changes either way.
 
-> **Status: Phases 1 and 2 complete.** The HTTP engine, local persistence,
-> variable resolution, Postman and cURL import, portable export and the
-> desktop interface are built and tested. The synchronisation server, hosted
-> service and billing are designed but not yet implemented. See
+> **Status: Phases 1–3 complete.** The HTTP engine, local persistence,
+> variable resolution, import/export, the desktop interface, the
+> self-hosted sync server and the client that talks to it are built and
+> tested — against SQLite and against PostgreSQL. The hosted service and
+> billing are designed but not yet implemented. See
 > [the roadmap](#roadmap) for exactly what works today.
 
 ## Why
@@ -78,6 +79,12 @@ portable JSON.
 request tabs, resizable and re-orientable panes, drag-and-drop reordering, a
 command palette, keyboard shortcuts throughout, and local request history.
 
+**Synchronisation** — optional, per workspace. Connect to a server you run,
+sign in, and your collections follow you between machines. Edits made
+offline upload when you reconnect. When two people change the same thing,
+you get both versions side by side and choose — nothing is overwritten on
+the strength of a timestamp. Secret values never leave your device.
+
 ## What does not work yet
 
 Stated plainly, because a README that implies otherwise wastes your time:
@@ -99,7 +106,7 @@ Stated plainly, because a README that implies otherwise wastes your time:
 |---|---|---|
 | 1 | Desktop shell, HTTP engine, SQLite persistence, save and reopen | **Done** |
 | 2 | Collections, environments, interpolation, auth, history, import/export | **Done** |
-| 3 | Self-hosted Axum sync server, users, revisions, WebSockets, conflicts | Designed |
+| 3 | Self-hosted Axum sync server, users, revisions, WebSockets, conflicts | **Done** |
 | 4 | OAuth 2.0 flows, sandboxed scripting, OpenAPI import, certificates | Designed |
 | 5 | Installers, signing, CI, benchmarks, security review | Not started |
 | 6 | Relay Cloud on Neon Postgres, multitenant, RLS | Designed |

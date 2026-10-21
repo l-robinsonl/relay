@@ -21,6 +21,48 @@ import type {
  * `RelayError` the UI can branch on.
  */
 
+/** What a sync server reports about itself. */
+export interface ServerHealth {
+  status: string
+  backend: string
+  protocol: string
+  version: string
+}
+
+/** How a workspace's synchronisation stands. */
+export interface SyncStatus {
+  connected: boolean
+  serverUrl: string | null
+  userEmail: string | null
+  signedIn: boolean
+  lastPulledSeq: number
+  lastSyncAt: number | null
+  lastError: string | null
+  pendingChanges: number
+  openConflicts: number
+}
+
+/** What one synchronisation pass did. */
+export interface SyncOutcome {
+  pulled: number
+  pushed: number
+  conflicts: number
+  rejected: number
+  head: number
+}
+
+/** A conflict awaiting the user's decision. */
+export interface ConflictView {
+  id: string
+  entity: string
+  entityId: string
+  name: string | null
+  local: Record<string, unknown>
+  server: Record<string, unknown> | null
+  serverDeleted: boolean
+  detectedAt: number
+}
+
 /** A resolved request, as returned by `request_resolve`. */
 export interface ResolvedPreview {
   spec: import('@relay/shared-types').HttpRequestSpec
@@ -132,6 +174,23 @@ export const api = {
     call<string>('export_curl', { doc, environmentId: environmentId ?? null }),
 
   // --- application state --------------------------------------------------------
+  // --- synchronisation ----------------------------------------------------
+  syncProbe: (serverUrl: string) => call<ServerHealth>('sync_probe', { serverUrl }),
+  syncConnect: (
+    workspaceId: string,
+    serverUrl: string,
+    email: string,
+    password: string,
+    join: boolean,
+  ) => call<SyncStatus>('sync_connect', { workspaceId, serverUrl, email, password, join }),
+  syncNow: (workspaceId: string) => call<SyncOutcome>('sync_now', { workspaceId }),
+  syncStatus: (workspaceId: string) => call<SyncStatus>('sync_status', { workspaceId }),
+  syncDisconnect: (workspaceId: string) => call<void>('sync_disconnect', { workspaceId }),
+  syncConflicts: (workspaceId: string) => call<ConflictView[]>('sync_conflicts', { workspaceId }),
+  syncResolve: (conflictId: string, keepLocal: boolean) =>
+    call<void>('sync_resolve', { conflictId, keepLocal }),
+
+  // --- application state --------------------------------------------------
   stateGet: (key: string) => call<string | null>('state_get', { key }),
   stateSet: (key: string, value: string) => call<void>('state_set', { key, value }),
   databaseBackup: (destination: string) => call<void>('database_backup', { destination }),
