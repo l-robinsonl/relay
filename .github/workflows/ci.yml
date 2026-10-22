@@ -2,8 +2,17 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # Both names deliberately: this workflow sat dormant for a week
+    # because it watched `main` while the branch was `master`.
+    branches: [master, main]
   pull_request:
+  workflow_dispatch:
+
+# A second push supersedes the first; no point finishing a run nobody
+# will read.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
@@ -44,7 +53,7 @@ jobs:
       - name: Bindings are up to date
         if: matrix.os == 'ubuntu-latest'
         run: |
-          cargo test -p relay-models export_bindings
+          cargo test -p relay-models -p relay-core export_bindings
           git diff --exit-code -- packages/shared-types/src/generated \
             || { echo "::error::Run 'npm run bindings' and commit the result."; exit 1; }
 
