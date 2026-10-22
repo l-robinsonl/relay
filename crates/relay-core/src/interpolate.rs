@@ -194,50 +194,52 @@ fn expand(
     let mut i = 0;
 
     while i < bytes.len() {
-        if bytes[i] == b'{' && i + 1 < bytes.len() && bytes[i + 1] == b'{' {
-            if let Some(end) = template[i + 2..].find("}}") {
-                let raw = &template[i + 2..i + 2 + end];
-                let name = raw.trim();
+        if bytes[i] == b'{'
+            && i + 1 < bytes.len()
+            && bytes[i + 1] == b'{'
+            && let Some(end) = template[i + 2..].find("}}")
+        {
+            let raw = &template[i + 2..i + 2 + end];
+            let name = raw.trim();
 
-                if name.is_empty() || name.contains('{') {
-                    // Not a reference: emit the braces verbatim.
-                    out.push_str(&template[i..i + 2]);
-                    i += 2;
-                    continue;
-                }
-
-                match context.get(name) {
-                    Some(binding) => {
-                        if binding.literal {
-                            // Substituted as written. See `set_literal`.
-                            out.push_str(&binding.value);
-                        } else if visiting.contains(name) {
-                            // A cycle. Leave the reference in place so the
-                            // user can see which variable is self-referential.
-                            out.push_str(&template[i..i + 4 + end]);
-                        } else {
-                            visiting.insert(name.to_string());
-                            out.push_str(&expand(
-                                &binding.value,
-                                context,
-                                missing,
-                                visiting,
-                                depth + 1,
-                            ));
-                            visiting.remove(name);
-                        }
-                    }
-                    None => {
-                        if !missing.iter().any(|m| m == name) {
-                            missing.push(name.to_string());
-                        }
-                        out.push_str(&template[i..i + 4 + end]);
-                    }
-                }
-
-                i += 4 + end;
+            if name.is_empty() || name.contains('{') {
+                // Not a reference: emit the braces verbatim.
+                out.push_str(&template[i..i + 2]);
+                i += 2;
                 continue;
             }
+
+            match context.get(name) {
+                Some(binding) => {
+                    if binding.literal {
+                        // Substituted as written. See `set_literal`.
+                        out.push_str(&binding.value);
+                    } else if visiting.contains(name) {
+                        // A cycle. Leave the reference in place so the
+                        // user can see which variable is self-referential.
+                        out.push_str(&template[i..i + 4 + end]);
+                    } else {
+                        visiting.insert(name.to_string());
+                        out.push_str(&expand(
+                            &binding.value,
+                            context,
+                            missing,
+                            visiting,
+                            depth + 1,
+                        ));
+                        visiting.remove(name);
+                    }
+                }
+                None => {
+                    if !missing.iter().any(|m| m == name) {
+                        missing.push(name.to_string());
+                    }
+                    out.push_str(&template[i..i + 4 + end]);
+                }
+            }
+
+            i += 4 + end;
+            continue;
         }
 
         // Advance by one full character so multi-byte text is not split.

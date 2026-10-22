@@ -175,4 +175,7 @@ sensitive.
 
 ## Licence
 
-MIT or Apache-2.0, at your option.
+MIT or Apache-2.0, at your option — [LICENSE-MIT](LICENSE-MIT) and
+[LICENSE-APACHE](LICENSE-APACHE). Unless you say otherwise, any
+contribution you intentionally submit for inclusion is dual licensed on
+the same terms, with no additional conditions.

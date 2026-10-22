@@ -14,6 +14,10 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Read-only by default; the one job that needs more says so itself.
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
@@ -109,6 +113,11 @@ jobs:
   audit:
     name: Dependency audit
     runs-on: ubuntu-latest
+    # audit-check reports through a check run, which it cannot create
+    # under the default read-only token.
+    permissions:
+      contents: read
+      checks: write
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable

@@ -32,11 +32,11 @@ Phases 1–3 complete. Phase 4 mostly. Phase 5 part-done.
 | OAuth 2.0 | authorization code + PKCE via loopback, client credentials, password; in-memory token cache, silent refresh |
 | TLS | per-request verification toggle, client certificates with host matching, proxies — all reachable from Settings |
 | Packaging | `.deb` / `.rpm` / `.AppImage` build |
+| CI | GitHub Actions: Rust + desktop build on Linux/macOS/Windows, frontend, bindings drift, dependency audit |
 
 | Not built | |
 |---|---|
 | Relay Cloud / billing | designed only (Phases 6–7) |
-| CI | written, never executed — no git remote |
 | Signing | nothing signed; macOS Gatekeeper will refuse outright |
 
 ## Verify
@@ -109,6 +109,12 @@ Run it: `npm run tauri dev`, or the built binary at
   it stays dependency-free, `NeonAuthenticator` for Cloud. Map Neon
   identity to a Relay user and keep workspace membership ours;
   `neon_auth.organization` is a parallel concept, not our workspaces.
+- **MSRV is 1.88, raised from 1.85 to take security fixes.** `time`
+  0.3.47+ (RUSTSEC-2026-0009) and `plist` 1.10+ (which pulls `quick-xml`
+  past two DoS advisories) both need it. Relay is an application, not a
+  library anyone builds against, so the promise cost nothing to raise.
+  Raising it also makes clippy enforce let-chains, which is why
+  `interpolate.rs` uses one.
 - **rusqlite pinned to 0.39.** 0.40 needs libsqlite3-sys 0.38; sqlx-sqlite
   needs <0.38; both link native sqlite3. Do not bump without checking.
 
@@ -180,9 +186,16 @@ Quote PSS. Never quote a figure this project did not measure.
 
 ## Next
 
-1. CI — written at `.github/workflows/ci.yml`, never run.
-2. Phase 6/7 — Relay Cloud on Neon, then Stripe. Billing last, by the
+1. Phase 6/7 — Relay Cloud on Neon, then Stripe. Billing last, by the
    user's own sequencing.
+
+**CI runs** at `github.com/l-robinsonl/relay`, on push to `master` or
+`main` and on pull requests. Its first run proved the workspace builds
+and tests on Linux, macOS *and* Windows, which nothing had checked
+before. Two things it caught immediately: `rustsec/audit-check` cannot
+create its check run under the default read-only `GITHUB_TOKEN`, and
+three advisories in transitive dependencies. Do not lower the audit job
+to a warning — it earned its place on its first run.
 
 Phase 4 is finished. What is left in Phase 5 is CI and signing, both of
 which need a git remote and a certificate respectively.
