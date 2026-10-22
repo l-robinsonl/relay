@@ -700,3 +700,69 @@ pub async fn sync_request_password_reset(
 ) -> RelayResult<()> {
     service.sync_request_password_reset(server_url, email).await
 }
+
+// --- workspace membership --------------------------------------------------
+
+/// Who is in a workspace, and as what.
+#[tauri::command]
+pub async fn sync_members(
+    service: State<'_, RelayService>,
+    workspace_id: WorkspaceId,
+) -> RelayResult<Vec<relay_app::sync::MemberView>> {
+    service.sync_members(workspace_id).await
+}
+
+/// Changes what a member may do.
+#[tauri::command]
+pub async fn sync_set_member_role(
+    service: State<'_, RelayService>,
+    workspace_id: WorkspaceId,
+    user_id: String,
+    role: relay_app::sync::Role,
+) -> RelayResult<()> {
+    service
+        .sync_set_member_role(workspace_id, user_id, role)
+        .await
+}
+
+/// Removes someone from a workspace.
+#[tauri::command]
+pub async fn sync_remove_member(
+    service: State<'_, RelayService>,
+    workspace_id: WorkspaceId,
+    user_id: String,
+) -> RelayResult<()> {
+    service.sync_remove_member(workspace_id, user_id).await
+}
+
+/// Invites an address to a workspace.
+#[tauri::command]
+pub async fn sync_invite(
+    service: State<'_, RelayService>,
+    workspace_id: WorkspaceId,
+    email: String,
+    role: relay_app::sync::Role,
+) -> RelayResult<relay_app::sync::InvitationView> {
+    service.sync_invite(workspace_id, email, role).await
+}
+
+/// Invitations sent but not yet accepted.
+#[tauri::command]
+pub async fn sync_invitations(
+    service: State<'_, RelayService>,
+    workspace_id: WorkspaceId,
+) -> RelayResult<Vec<relay_app::sync::InvitationView>> {
+    service.sync_invitations(workspace_id).await
+}
+
+/// Withdraws an invitation.
+#[tauri::command]
+pub async fn sync_revoke_invitation(
+    service: State<'_, RelayService>,
+    workspace_id: WorkspaceId,
+    invitation_id: String,
+) -> RelayResult<()> {
+    service
+        .sync_revoke_invitation(workspace_id, invitation_id)
+        .await
+}

@@ -8,8 +8,11 @@ import type {
   HttpExchange,
   ImportReport,
   OAuth2Config,
+  InvitationView,
+  MemberView,
   RelayError,
   RequestDoc,
+  Role,
   UserProfile,
   TreeNode,
   Workspace,
@@ -248,6 +251,20 @@ export const api = {
   // --- application state --------------------------------------------------------
   // --- synchronisation ----------------------------------------------------
   syncProbe: (serverUrl: string) => call<ServerHealth>('sync_probe', { serverUrl }),
+  // --- membership ----------------------------------------------------------
+  syncMembers: (workspaceId: string) =>
+    call<MemberView[]>('sync_members', { workspaceId }),
+  syncSetMemberRole: (workspaceId: string, userId: string, role: Role) =>
+    call<void>('sync_set_member_role', { workspaceId, userId, role }),
+  syncRemoveMember: (workspaceId: string, userId: string) =>
+    call<void>('sync_remove_member', { workspaceId, userId }),
+  syncInvite: (workspaceId: string, email: string, role: Role) =>
+    call<InvitationView>('sync_invite', { workspaceId, email, role }),
+  syncInvitations: (workspaceId: string) =>
+    call<InvitationView[]>('sync_invitations', { workspaceId }),
+  syncRevokeInvitation: (workspaceId: string, invitationId: string) =>
+    call<void>('sync_revoke_invitation', { workspaceId, invitationId }),
+
   syncRegister: (
     serverUrl: string,
     email: string,

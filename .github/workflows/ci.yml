@@ -57,7 +57,7 @@ jobs:
       - name: Bindings are up to date
         if: matrix.os == 'ubuntu-latest'
         run: |
-          cargo test -p relay-models -p relay-core export_bindings
+          cargo test -p relay-models -p relay-core -p relay-sync -p relay-script export_bindings
           git diff --exit-code -- packages/shared-types/src/generated \
             || { echo "::error::Run 'npm run bindings' and commit the result."; exit 1; }
 

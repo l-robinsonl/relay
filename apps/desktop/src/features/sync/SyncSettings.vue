@@ -6,6 +6,8 @@ import { api } from '@/services/ipc'
 import { formatRelativeTime } from '@/composables/useFormat'
 import { useDialogStore } from '@/stores/dialogs'
 import { useSyncStore } from '@/stores/sync'
+import MembersPanel from '@/features/sync/MembersPanel.vue'
+import { useWorkspaceStore } from '@/stores/workspace'
 
 /** Connecting a workspace to a server, or disconnecting it. */
 const props = defineProps<{ open: boolean }>()
@@ -13,6 +15,7 @@ const emit = defineEmits<{ close: [] }>()
 
 const sync = useSyncStore()
 const dialogs = useDialogStore()
+const workspace = useWorkspaceStore()
 
 const serverUrl = ref('')
 const email = ref('')
@@ -256,6 +259,12 @@ async function disconnect () {
               Disconnecting leaves every request, collection and environment on this
               machine. Only the link to the server is removed.
             </p>
+
+            <!-- Membership. Only meaningful once there is a server to
+                 ask, which is why it lives inside the connected branch. -->
+            <div v-if="workspace.current" class="border-t border-subtle pt-3">
+              <MembersPanel :workspace-id="workspace.current.id" :open="open" />
+            </div>
           </div>
 
           <!-- Not connected -->

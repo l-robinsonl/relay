@@ -1065,6 +1065,99 @@ impl RelayService {
     ///
     /// `join` adopts a workspace that already exists on the server rather
     /// than publishing the local one, which is what a second device does.
+    /// The server and token a connected workspace syncs with.
+    ///
+    /// Every membership call needs both, and each would otherwise repeat
+    /// the same two lookups and the same two ways of being wrong.
+    async fn sync_session(&self, workspace: &WorkspaceId) -> RelayResult<(SyncClient, String)> {
+        let id = workspace.clone();
+        let state = self
+            .db
+            .call(move |c| relay_storage::SyncRepo::state(c, &id))
+            .await?
+            .ok_or_else(|| {
+                RelayError::new(
+                    ErrorKind::Sync,
+                    "this workspace is not connected to a server",
+                )
+            })?;
+
+        let token = self.sync_engine().token(workspace).ok_or_else(|| {
+            RelayError::new(ErrorKind::Forbidden, "you are signed out of that server")
+                .with_detail("Reconnect the workspace under Sync.".to_string())
+        })?;
+
+        Ok((SyncClient::new(&state.server_url)?, token))
+    }
+
+    /// Who is in a workspace, and as what.
+    pub async fn sync_members(
+        &self,
+        workspace: WorkspaceId,
+    ) -> RelayResult<Vec<relay_sync::MemberView>> {
+        let (client, token) = self.sync_session(&workspace).await?;
+        client.list_members(&token, workspace.as_str()).await
+    }
+
+    /// Changes what a member may do.
+    pub async fn sync_set_member_role(
+        &self,
+        workspace: WorkspaceId,
+        user_id: String,
+        role: relay_sync::Role,
+    ) -> RelayResult<()> {
+        let (client, token) = self.sync_session(&workspace).await?;
+        client
+            .set_member_role(&token, workspace.as_str(), &user_id, role)
+            .await
+    }
+
+    /// Removes someone from a workspace.
+    pub async fn sync_remove_member(
+        &self,
+        workspace: WorkspaceId,
+        user_id: String,
+    ) -> RelayResult<()> {
+        let (client, token) = self.sync_session(&workspace).await?;
+        client
+            .remove_member(&token, workspace.as_str(), &user_id)
+            .await
+    }
+
+    /// Invites an address to a workspace.
+    pub async fn sync_invite(
+        &self,
+        workspace: WorkspaceId,
+        email: String,
+        role: relay_sync::Role,
+    ) -> RelayResult<relay_sync::InvitationView> {
+        let (client, token) = self.sync_session(&workspace).await?;
+        client
+            .invite(&token, workspace.as_str(), &email, role)
+            .await
+    }
+
+    /// Invitations sent but not yet accepted.
+    pub async fn sync_invitations(
+        &self,
+        workspace: WorkspaceId,
+    ) -> RelayResult<Vec<relay_sync::InvitationView>> {
+        let (client, token) = self.sync_session(&workspace).await?;
+        client.list_invitations(&token, workspace.as_str()).await
+    }
+
+    /// Withdraws an invitation.
+    pub async fn sync_revoke_invitation(
+        &self,
+        workspace: WorkspaceId,
+        invitation_id: String,
+    ) -> RelayResult<()> {
+        let (client, token) = self.sync_session(&workspace).await?;
+        client
+            .revoke_invitation(&token, workspace.as_str(), &invitation_id)
+            .await
+    }
+
     /// Creates an account on a sync server.
     ///
     /// Separate from connecting: someone may want an account before they

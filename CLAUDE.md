@@ -35,6 +35,7 @@ Phases 1–3 complete. Phase 4 mostly. Phase 5 part-done.
 | CI | GitHub Actions: Rust + desktop build on Linux/macOS/Windows, frontend, bindings drift, dependency audit |
 | Accounts | register from the app, e-mail confirmation, password reset, single-use hashed tokens, Resend or log-only |
 | Invitations | workspace + role, bound to the invited address, admin-only, revocable; `invite` signup mode now works |
+| Members UI | invite, change a role, remove, withdraw an invitation — all from the Sync dialog |
 
 | Not built | |
 |---|---|
@@ -132,6 +133,12 @@ Run it: `npm run tauri dev`, or the built binary at
   exists because of this: a provider's refusal ("domain not verified")
   is the operator's only clue and contains no schema or query detail.
   Think twice before routing a new failure through `Internal`.
+- **`npm run bindings` must name every crate that exports types.** It
+  listed relay-models and relay-core only, so relay-sync's generated
+  TypeScript was refreshed solely as a side effect of a full
+  `cargo test --workspace`, and CI's drift check could not have caught
+  a stale one. relay-sync and relay-script are in the list now; add any
+  new crate that derives `TS`.
 - **An invitation is bound to the address it was sent to.** Not just
   to its token. E-mails get forwarded, and a token-only check would
   turn a forwarded invitation into access to someone else's workspace.

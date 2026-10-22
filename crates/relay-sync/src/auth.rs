@@ -83,6 +83,36 @@ pub struct UserProfile {
     pub email_verified_at: Option<Timestamp>,
 }
 
+/// A workspace member, as the API reports them.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct MemberView {
+    /// Who they are.
+    pub user: UserProfile,
+    /// What they may do.
+    pub role: Role,
+    /// When they were added.
+    pub joined_at: Timestamp,
+}
+
+/// An invitation that has been sent but not yet accepted.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct InvitationView {
+    /// Its id, for revoking.
+    pub id: String,
+    /// Who it was sent to. It admits nobody else.
+    pub email: String,
+    /// What it grants.
+    pub role: Role,
+    /// When it was sent.
+    pub created_at: Timestamp,
+    /// When it lapses.
+    pub expires_at: Timestamp,
+}
+
 /// Credentials submitted to sign in.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]

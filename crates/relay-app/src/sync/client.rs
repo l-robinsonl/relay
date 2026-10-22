@@ -192,6 +192,137 @@ impl SyncClient {
         parse(response).await
     }
 
+    /// Who is in a workspace, and as what.
+    pub async fn list_members(
+        &self,
+        token: &str,
+        workspace_id: &str,
+    ) -> RelayResult<Vec<relay_sync::MemberView>> {
+        let response = self
+            .http
+            .get(format!(
+                "{}/v1/workspaces/{workspace_id}/members",
+                self.base_url
+            ))
+            .bearer_auth(token)
+            .send()
+            .await
+            .map_err(transport_error)?;
+
+        parse(response).await
+    }
+
+    /// Changes what a member may do.
+    pub async fn set_member_role(
+        &self,
+        token: &str,
+        workspace_id: &str,
+        user_id: &str,
+        role: relay_sync::Role,
+    ) -> RelayResult<()> {
+        let response = self
+            .http
+            .put(format!(
+                "{}/v1/workspaces/{workspace_id}/members/{user_id}",
+                self.base_url
+            ))
+            .bearer_auth(token)
+            .json(&serde_json::json!({ "role": role }))
+            .send()
+            .await
+            .map_err(transport_error)?;
+
+        expect_success(response).await?;
+        Ok(())
+    }
+
+    /// Removes someone from a workspace.
+    pub async fn remove_member(
+        &self,
+        token: &str,
+        workspace_id: &str,
+        user_id: &str,
+    ) -> RelayResult<()> {
+        let response = self
+            .http
+            .delete(format!(
+                "{}/v1/workspaces/{workspace_id}/members/{user_id}",
+                self.base_url
+            ))
+            .bearer_auth(token)
+            .send()
+            .await
+            .map_err(transport_error)?;
+
+        expect_success(response).await?;
+        Ok(())
+    }
+
+    /// Invites an address to a workspace with a role.
+    pub async fn invite(
+        &self,
+        token: &str,
+        workspace_id: &str,
+        email: &str,
+        role: relay_sync::Role,
+    ) -> RelayResult<relay_sync::InvitationView> {
+        let response = self
+            .http
+            .post(format!(
+                "{}/v1/workspaces/{workspace_id}/invitations",
+                self.base_url
+            ))
+            .bearer_auth(token)
+            .json(&serde_json::json!({ "email": email, "role": role }))
+            .send()
+            .await
+            .map_err(transport_error)?;
+
+        parse(response).await
+    }
+
+    /// Invitations sent but not yet accepted.
+    pub async fn list_invitations(
+        &self,
+        token: &str,
+        workspace_id: &str,
+    ) -> RelayResult<Vec<relay_sync::InvitationView>> {
+        let response = self
+            .http
+            .get(format!(
+                "{}/v1/workspaces/{workspace_id}/invitations",
+                self.base_url
+            ))
+            .bearer_auth(token)
+            .send()
+            .await
+            .map_err(transport_error)?;
+
+        parse(response).await
+    }
+
+    /// Withdraws an invitation.
+    pub async fn revoke_invitation(
+        &self,
+        token: &str,
+        workspace_id: &str,
+        invitation_id: &str,
+    ) -> RelayResult<()> {
+        let response = self
+            .http
+            .delete(format!(
+                "{}/v1/workspaces/{workspace_id}/invitations/{invitation_id}",
+                self.base_url
+            ))
+            .bearer_auth(token)
+            .send()
+            .await
+            .map_err(transport_error)?;
+
+        expect_success(response).await?;
+        Ok(())
+    }
+
     /// Creates a workspace on the server, keeping the local id.
     pub async fn create_workspace(&self, token: &str, id: &str, name: &str) -> RelayResult<()> {
         let response = self

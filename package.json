@@ -17,7 +17,7 @@
     "test": "npm run test --workspace=@relay/desktop",
     "typecheck": "npm run typecheck --workspace=@relay/desktop",
     "lint": "npm run lint --workspace=@relay/desktop",
-    "bindings": "cargo test -p relay-models -p relay-core export_bindings",
+    "bindings": "cargo test -p relay-models -p relay-core -p relay-sync -p relay-script export_bindings",
     "rust:test": "cargo test --workspace",
     "rust:fmt": "cargo fmt --all",
     "rust:lint": "cargo clippy --workspace --all-targets -- -D warnings",

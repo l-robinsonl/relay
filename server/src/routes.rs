@@ -12,8 +12,8 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::Response;
 use relay_models::Timestamp;
 use relay_sync::{
-    ApplyResult, ChangePage, LoginRequest, LoginResponse, Membership, MutationBatch, Role,
-    UserProfile,
+    ApplyResult, ChangePage, InvitationView, LoginRequest, LoginResponse, MemberView, Membership,
+    MutationBatch, Role, UserProfile,
 };
 use serde::{Deserialize, Serialize};
 
@@ -173,31 +173,14 @@ pub async fn confirm_password_reset(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// An invitation as the API reports it.
-#[derive(Debug, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct InvitationView {
-    /// Its id, for revoking.
-    pub id: String,
-    /// Who it was sent to.
-    pub email: String,
-    /// What it grants.
-    pub role: Role,
-    /// When it was sent.
-    pub created_at: Timestamp,
-    /// When it lapses.
-    pub expires_at: Timestamp,
-}
-
-impl From<crate::store::Invitation> for InvitationView {
-    fn from(invitation: crate::store::Invitation) -> Self {
-        Self {
-            id: invitation.id,
-            email: invitation.email,
-            role: invitation.role,
-            created_at: Timestamp(invitation.created_at),
-            expires_at: Timestamp(invitation.expires_at),
-        }
+/// Turns a stored invitation into the shape the API reports.
+fn invitation_view(invitation: crate::store::Invitation) -> InvitationView {
+    InvitationView {
+        id: invitation.id,
+        email: invitation.email,
+        role: invitation.role,
+        created_at: Timestamp(invitation.created_at),
+        expires_at: Timestamp(invitation.expires_at),
     }
 }
 
@@ -229,7 +212,7 @@ pub async fn create_invitation(
     )
     .await?;
 
-    Ok(Json(invitation.into()))
+    Ok(Json(invitation_view(invitation)))
 }
 
 /// `GET /v1/workspaces/{id}/invitations`
@@ -243,7 +226,7 @@ pub async fn list_invitations(
         .list_invitations(&user.actor(), &workspace_id)
         .await?;
 
-    Ok(Json(invitations.into_iter().map(Into::into).collect()))
+    Ok(Json(invitations.into_iter().map(invitation_view).collect()))
 }
 
 /// `DELETE /v1/workspaces/{id}/invitations/{invitation_id}`
@@ -468,24 +451,12 @@ pub async fn export(
 
 // --- membership ------------------------------------------------------------
 
-/// A member and who they are.
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct MemberEntry {
-    /// Who they are.
-    pub user: UserProfile,
-    /// What they may do.
-    pub role: Role,
-    /// When they were added.
-    pub joined_at: Timestamp,
-}
-
 /// `GET /v1/workspaces/{id}/members`
 pub async fn list_members(
     State(state): State<AppState>,
     user: AuthenticatedUser,
     Path(workspace_id): Path<String>,
-) -> ServerResult<Json<Vec<MemberEntry>>> {
+) -> ServerResult<Json<Vec<MemberView>>> {
     let members = state
         .store
         .list_members(&user.actor(), &workspace_id)
@@ -494,7 +465,7 @@ pub async fn list_members(
     Ok(Json(
         members
             .into_iter()
-            .map(|(membership, profile)| MemberEntry {
+            .map(|(membership, profile)| MemberView {
                 user: profile,
                 role: membership.role,
                 joined_at: membership.created_at,

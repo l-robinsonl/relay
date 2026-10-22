@@ -114,11 +114,12 @@ memory, and neither can read a credential.
 request tabs, resizable and re-orientable panes, drag-and-drop reordering, a
 command palette, keyboard shortcuts throughout, and local request history.
 
-**Invitations** — a workspace administrator invites an address and
-chooses what it may do. The invitation is bound to that address, so a
-forwarded message does not become access, and it expires after a week
-or can be revoked. A server set to invite-only lets nobody register
-without one.
+**Invitations and members** — from inside Relay, a workspace
+administrator can see who has access, change what they may do, remove
+them, and invite someone new by address and role. An invitation is bound to the
+address it was sent to, so a forwarded message does not become access;
+it expires after a week and can be withdrawn. A server set to
+invite-only lets nobody register without one.
 
 **Synchronisation** — optional, per workspace. Connect to a server you run,
 sign in, and your collections follow you between machines. Changes from a
