@@ -20,6 +20,15 @@ pub enum ServerError {
     #[error("no such workspace, or you do not have access to it")]
     Forbidden,
 
+    /// The credentials were right but the address is unconfirmed.
+    ///
+    /// Distinct from [`Self::Unauthenticated`] so the client can say
+    /// "check your inbox" rather than "wrong password". Only reachable
+    /// after the password has already checked out, so it reveals
+    /// nothing to someone who does not have it.
+    #[error("confirm your e-mail address before signing in")]
+    EmailNotVerified,
+
     /// The request was malformed.
     #[error("{0}")]
     BadRequest(String),
@@ -49,6 +58,17 @@ pub enum ServerError {
     #[error("internal error")]
     Internal(String),
 
+    /// The mail provider would not take the message.
+    ///
+    /// Unlike [`Self::Internal`], this keeps its detail in `Display`.
+    /// The provider's refusals are the operator's only clue — "domain
+    /// not verified", "invalid from address" — and they describe the
+    /// mail configuration, not Relay's schema or queries. Clients still
+    /// learn nothing: `to_sync_error` flattens it like any other
+    /// internal fault, and the e-mail endpoints never surface it at all.
+    #[error("the mail provider refused the message: {0}")]
+    Mail(String),
+
     /// The server is misconfigured.
     ///
     /// Keeps its message, unlike [`Self::Internal`]: this is reported to
@@ -64,13 +84,16 @@ impl ServerError {
     pub fn status(&self) -> StatusCode {
         match self {
             Self::Unauthenticated => StatusCode::UNAUTHORIZED,
+            Self::EmailNotVerified => StatusCode::FORBIDDEN,
             Self::Forbidden => StatusCode::NOT_FOUND,
             Self::BadRequest(_) => StatusCode::BAD_REQUEST,
             Self::LimitExceeded { .. } => StatusCode::PAYLOAD_TOO_LARGE,
             Self::Conflict(_) => StatusCode::CONFLICT,
-            Self::Database(_) | Self::PasswordHash(_) | Self::Internal(_) | Self::Config(_) => {
-                StatusCode::INTERNAL_SERVER_ERROR
-            }
+            Self::Database(_)
+            | Self::PasswordHash(_)
+            | Self::Internal(_)
+            | Self::Mail(_)
+            | Self::Config(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
 
@@ -78,6 +101,12 @@ impl ServerError {
     pub fn to_sync_error(&self) -> SyncError {
         match self {
             Self::Unauthenticated => SyncError::Unauthenticated,
+            // Carried as a bad request with its own wording so the client
+            // can show "check your inbox" without needing a new variant
+            // on the wire that older clients would not understand.
+            Self::EmailNotVerified => SyncError::BadRequest {
+                message: self.to_string(),
+            },
             Self::Forbidden => SyncError::Forbidden,
             Self::BadRequest(message) => SyncError::BadRequest {
                 message: message.clone(),
@@ -92,9 +121,11 @@ impl ServerError {
             // Internal detail stays in the log, not in the response: a
             // database error message can disclose schema and query shape,
             // and a configuration message can disclose deployment layout.
-            Self::Database(_) | Self::PasswordHash(_) | Self::Internal(_) | Self::Config(_) => {
-                SyncError::Internal
-            }
+            Self::Database(_)
+            | Self::PasswordHash(_)
+            | Self::Internal(_)
+            | Self::Mail(_)
+            | Self::Config(_) => SyncError::Internal,
         }
     }
 }

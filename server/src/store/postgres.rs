@@ -21,7 +21,7 @@ use sqlx::postgres::{PgPoolOptions, PgRow};
 use sqlx::{PgPool, Row};
 
 use super::logic::{self, CurrentState, MutationBatchRef, Verdict};
-use super::{Actor, NewUser, ServerWorkspace, StoredUser, SyncStore};
+use super::{Actor, EmailTokenPurpose, NewUser, ServerWorkspace, StoredUser, SyncStore};
 use crate::error::{ServerError, ServerResult};
 
 /// A sync store backed by PostgreSQL.
@@ -90,9 +90,15 @@ fn now_millis() -> i64 {
 #[async_trait]
 impl SyncStore for PostgresStore {
     async fn migrate(&self) -> ServerResult<()> {
-        sqlx::raw_sql(include_str!("../../migrations/postgres/0001_initial.sql"))
-            .execute(&self.pool)
-            .await?;
+        // Applied in order on every start. Each is written to be
+        // re-runnable (IF NOT EXISTS throughout), which is why there is
+        // no version table to get out of step with the files.
+        for sql in [
+            include_str!("../../migrations/postgres/0001_initial.sql"),
+            include_str!("../../migrations/postgres/0002_email_tokens.sql"),
+        ] {
+            sqlx::raw_sql(sql).execute(&self.pool).await?;
+        }
         Ok(())
     }
 
@@ -141,12 +147,14 @@ impl SyncStore for PostgresStore {
             display_name: user.display_name,
             is_server_admin: user.is_server_admin,
             created_at: Timestamp(created_at),
+            email_verified_at: None,
         })
     }
 
     async fn find_user_by_email(&self, email: &str) -> ServerResult<Option<StoredUser>> {
         let row = sqlx::query(
-            "SELECT id, email, display_name, is_server_admin, created_at, password_hash
+            "SELECT id, email, display_name, is_server_admin, created_at, password_hash,
+                    email_verified_at
              FROM relay.users WHERE email_normalised = $1",
         )
         .bind(email.trim().to_lowercase())
@@ -160,6 +168,7 @@ impl SyncStore for PostgresStore {
                 display_name: r.get("display_name"),
                 is_server_admin: r.get("is_server_admin"),
                 created_at: Timestamp(r.get("created_at")),
+                email_verified_at: r.get::<Option<i64>, _>("email_verified_at").map(Timestamp),
             },
             password_hash: r.get("password_hash"),
         }))
@@ -194,7 +203,8 @@ impl SyncStore for PostgresStore {
 
     async fn session_user(&self, token_hash: &str) -> ServerResult<Option<UserProfile>> {
         let row = sqlx::query(
-            "SELECT u.id, u.email, u.display_name, u.is_server_admin, u.created_at
+            "SELECT u.id, u.email, u.display_name, u.is_server_admin, u.created_at,
+                    u.email_verified_at
              FROM relay.sessions s
              JOIN relay.users u ON u.id = s.user_id
              WHERE s.token_hash = $1 AND s.expires_at > $2",
@@ -210,6 +220,7 @@ impl SyncStore for PostgresStore {
             display_name: r.get("display_name"),
             is_server_admin: r.get("is_server_admin"),
             created_at: Timestamp(r.get("created_at")),
+            email_verified_at: r.get::<Option<i64>, _>("email_verified_at").map(Timestamp),
         }))
     }
 
@@ -219,6 +230,107 @@ impl SyncStore for PostgresStore {
             .execute(&self.pool)
             .await?;
         Ok(())
+    }
+
+    async fn create_email_token(
+        &self,
+        user_id: &str,
+        purpose: EmailTokenPurpose,
+        token_hash: &str,
+        expires_at: i64,
+    ) -> ServerResult<()> {
+        sqlx::query(
+            "INSERT INTO relay.email_tokens
+                 (token_hash, user_id, purpose, expires_at, created_at)
+             VALUES ($1, $2, $3, $4, $5)",
+        )
+        .bind(token_hash)
+        .bind(user_id)
+        .bind(purpose.as_str())
+        .bind(expires_at)
+        .bind(now_millis())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn consume_email_token(
+        &self,
+        purpose: EmailTokenPurpose,
+        token_hash: &str,
+        now: i64,
+    ) -> ServerResult<Option<String>> {
+        // One statement: DELETE ... RETURNING. Two concurrent redemptions
+        // of the same token cannot both see it, so a token is single-use
+        // even under a race.
+        let row = sqlx::query(
+            "DELETE FROM relay.email_tokens
+             WHERE token_hash = $1 AND purpose = $2 AND expires_at > $3
+             RETURNING user_id",
+        )
+        .bind(token_hash)
+        .bind(purpose.as_str())
+        .bind(now)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.map(|r| r.get("user_id")))
+    }
+
+    async fn latest_email_token_at(
+        &self,
+        user_id: &str,
+        purpose: EmailTokenPurpose,
+    ) -> ServerResult<Option<i64>> {
+        let row = sqlx::query(
+            "SELECT MAX(created_at) AS latest FROM relay.email_tokens
+             WHERE user_id = $1 AND purpose = $2",
+        )
+        .bind(user_id)
+        .bind(purpose.as_str())
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.and_then(|r| r.get::<Option<i64>, _>("latest")))
+    }
+
+    async fn clear_email_tokens(
+        &self,
+        user_id: &str,
+        purpose: EmailTokenPurpose,
+    ) -> ServerResult<()> {
+        sqlx::query("DELETE FROM relay.email_tokens WHERE user_id = $1 AND purpose = $2")
+            .bind(user_id)
+            .bind(purpose.as_str())
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn mark_email_verified(&self, user_id: &str, at: i64) -> ServerResult<()> {
+        sqlx::query("UPDATE relay.users SET email_verified_at = $1 WHERE id = $2")
+            .bind(at)
+            .bind(user_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn set_password_hash(&self, user_id: &str, password_hash: &str) -> ServerResult<()> {
+        sqlx::query("UPDATE relay.users SET password_hash = $1 WHERE id = $2")
+            .bind(password_hash)
+            .bind(user_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn delete_sessions_for_user(&self, user_id: &str) -> ServerResult<u64> {
+        let result = sqlx::query("DELETE FROM relay.sessions WHERE user_id = $1")
+            .bind(user_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected())
     }
 
     async fn create_workspace(
@@ -418,6 +530,10 @@ impl SyncStore for PostgresStore {
                         display_name: r.get("display_name"),
                         is_server_admin: r.get("is_server_admin"),
                         created_at: Timestamp(r.get("user_created_at")),
+                        // Not selected: whether a teammate has confirmed
+                        // their address is their business, not the
+                        // workspace's.
+                        email_verified_at: None,
                     },
                 ))
             })

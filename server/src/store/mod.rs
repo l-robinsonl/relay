@@ -62,6 +62,42 @@ pub struct NewUser {
     pub is_server_admin: bool,
 }
 
+/// What an e-mailed token is for.
+///
+/// Part of the lookup, not a label on it: a token issued to confirm an
+/// address must never be redeemable to set a password, or anyone who
+/// can read a verification mail can take the account.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EmailTokenPurpose {
+    /// Confirms the address belongs to whoever registered it.
+    VerifyEmail,
+    /// Authorises setting a new password without the old one.
+    ResetPassword,
+}
+
+impl EmailTokenPurpose {
+    /// How it is spelled in the database.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::VerifyEmail => "verify_email",
+            Self::ResetPassword => "reset_password",
+        }
+    }
+
+    /// How long a token of this kind stays valid.
+    ///
+    /// A reset token is short-lived because it is a bearer credential
+    /// for the whole account; a verification token is merely a proof of
+    /// delivery, and expiring it overnight strands anyone who registered
+    /// before going to bed.
+    pub fn lifetime(self) -> std::time::Duration {
+        match self {
+            Self::VerifyEmail => std::time::Duration::from_secs(24 * 60 * 60),
+            Self::ResetPassword => std::time::Duration::from_secs(60 * 60),
+        }
+    }
+}
+
 /// What a lookup by e-mail returns, including the hash to verify against.
 #[derive(Debug, Clone)]
 pub struct StoredUser {
@@ -108,6 +144,56 @@ pub trait SyncStore: Send + Sync + 'static {
 
     /// Ends one session.
     async fn delete_session(&self, token_hash: &str) -> ServerResult<()>;
+
+    // --- e-mailed tokens -------------------------------------------------
+
+    /// Stores the hash of a token that was e-mailed to a user.
+    async fn create_email_token(
+        &self,
+        user_id: &str,
+        purpose: EmailTokenPurpose,
+        token_hash: &str,
+        expires_at: i64,
+    ) -> ServerResult<()>;
+
+    /// Redeems a token, returning the user it belonged to.
+    ///
+    /// Deletes and returns in one statement, so a token presented twice
+    /// concurrently is honoured exactly once. An expired token is
+    /// removed and reported as absent, which is the same answer a
+    /// forged one gets.
+    async fn consume_email_token(
+        &self,
+        purpose: EmailTokenPurpose,
+        token_hash: &str,
+        now: i64,
+    ) -> ServerResult<Option<String>>;
+
+    /// When the most recent token of this kind was issued to this user.
+    ///
+    /// Backs the resend cooldown: without one, anyone who knows an
+    /// address can use this server to post mail at it.
+    async fn latest_email_token_at(
+        &self,
+        user_id: &str,
+        purpose: EmailTokenPurpose,
+    ) -> ServerResult<Option<i64>>;
+
+    /// Discards every outstanding token of one kind for a user.
+    async fn clear_email_tokens(
+        &self,
+        user_id: &str,
+        purpose: EmailTokenPurpose,
+    ) -> ServerResult<()>;
+
+    /// Records that a user has confirmed their address.
+    async fn mark_email_verified(&self, user_id: &str, at: i64) -> ServerResult<()>;
+
+    /// Replaces a user's password hash.
+    async fn set_password_hash(&self, user_id: &str, password_hash: &str) -> ServerResult<()>;
+
+    /// Signs every device out, by dropping all of a user's sessions.
+    async fn delete_sessions_for_user(&self, user_id: &str) -> ServerResult<u64>;
 
     // --- workspaces and membership -----------------------------------------
 

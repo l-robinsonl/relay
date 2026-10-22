@@ -26,23 +26,45 @@ pub struct AppState {
     pub hub: Hub,
     /// The server's settings.
     pub config: Arc<Config>,
+    /// Where transactional e-mail goes.
+    pub mailer: Arc<dyn crate::mail::Mailer>,
 }
 
 impl std::fmt::Debug for AppState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AppState")
             .field("backend", &self.store.backend())
+            .field("mailer", &self.mailer.name())
             .finish()
     }
 }
 
 impl AppState {
-    /// Builds the state.
+    /// Builds the state, choosing a mailer from the configuration.
+    ///
+    /// Falls back to the logging mailer rather than refusing to start:
+    /// a misconfigured mail provider should not take the sync server
+    /// down with it, and the startup log says which one is in use.
     pub fn new(store: Arc<dyn SyncStore>, config: Config) -> Self {
+        let mailer = crate::mail::from_config(&config).unwrap_or_else(|error| {
+            tracing::error!(%error, "falling back to logging e-mail instead of sending it");
+            Arc::new(crate::mail::LogMailer)
+        });
+
+        Self::with_mailer(store, config, mailer)
+    }
+
+    /// Builds the state with a given mailer. Used by tests.
+    pub fn with_mailer(
+        store: Arc<dyn SyncStore>,
+        config: Config,
+        mailer: Arc<dyn crate::mail::Mailer>,
+    ) -> Self {
         Self {
             store,
             hub: Hub::new(),
             config: Arc::new(config),
+            mailer,
         }
     }
 
@@ -138,6 +160,22 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/auth/me", get(routes::me))
         .route("/v1/auth/logout", post(routes::logout))
         .route(
+            "/v1/auth/verify/request",
+            post(routes::request_verification),
+        )
+        .route(
+            "/v1/auth/verify/confirm",
+            post(routes::confirm_verification),
+        )
+        .route(
+            "/v1/auth/password/reset",
+            post(routes::request_password_reset),
+        )
+        .route(
+            "/v1/auth/password/confirm",
+            post(routes::confirm_password_reset),
+        )
+        .route(
             "/v1/workspaces",
             get(routes::list_workspaces).post(routes::create_workspace),
         )
@@ -184,7 +222,7 @@ pub async fn register_user(
     let email = auth::validate_email(email)?;
     let hash = auth::hash_password(password)?;
 
-    state
+    let profile = state
         .store
         .create_user(NewUser {
             email,
@@ -192,7 +230,21 @@ pub async fn register_user(
             display_name: display_name.trim().to_string(),
             is_server_admin: false,
         })
-        .await
+        .await?;
+
+    // Best effort: the account exists either way, and a user who never
+    // receives the mail can ask for another.
+    if let Err(error) = issue_email_token(
+        state,
+        &profile,
+        crate::store::EmailTokenPurpose::VerifyEmail,
+    )
+    .await
+    {
+        tracing::error!(%error, user = %profile.id, "could not send the verification e-mail");
+    }
+
+    Ok(profile)
 }
 
 /// Verifies credentials and opens a session.
@@ -212,6 +264,17 @@ pub async fn sign_in(
 
     if !auth::verify_password(password, &stored.password_hash) {
         return Err(ServerError::Unauthenticated);
+    }
+
+    // Checked after the password, so this never tells someone without
+    // the password whether an address is registered. Administrators are
+    // exempt: the bootstrap admin is created from the environment and
+    // has no inbox to check.
+    if state.config.require_verified_email
+        && stored.profile.email_verified_at.is_none()
+        && !stored.profile.is_server_admin
+    {
+        return Err(ServerError::EmailNotVerified);
     }
 
     let session = auth::new_session_token()?;
@@ -261,4 +324,171 @@ pub async fn health_check(State(state): State<AppState>) -> (StatusCode, Json<He
     };
 
     (code, Json(body))
+}
+
+// --- e-mail verification and password reset ------------------------------
+
+/// How soon a user may ask for another e-mail of the same kind.
+///
+/// Without this, anyone who knows an address can use this server to post
+/// mail at it, which is both a nuisance to the recipient and a fast way
+/// to get a sending domain blocked.
+const RESEND_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Issues a token, stores its hash and e-mails the link.
+///
+/// Returns quietly whether or not anything was sent: the caller must not
+/// be able to tell an unregistered address from a registered one.
+async fn issue_email_token(
+    state: &AppState,
+    user: &UserProfile,
+    purpose: crate::store::EmailTokenPurpose,
+) -> ServerResult<()> {
+    use crate::store::EmailTokenPurpose;
+
+    let now = Timestamp::now().as_millis();
+
+    if let Some(last) = state.store.latest_email_token_at(&user.id, purpose).await?
+        && now - last < RESEND_COOLDOWN.as_millis() as i64
+    {
+        // Already sent one a moment ago. Succeed silently rather than
+        // reporting a rate limit, which would itself confirm the address.
+        tracing::debug!(user = %user.id, "suppressed a duplicate e-mail within the cooldown");
+        return Ok(());
+    }
+
+    let token = auth::new_session_token()?;
+    let expires_at = now + purpose.lifetime().as_millis() as i64;
+
+    state
+        .store
+        .create_email_token(&user.id, purpose, &token.hash, expires_at)
+        .await?;
+
+    let base = state.config.public_url.trim_end_matches('/');
+    let message = match purpose {
+        EmailTokenPurpose::VerifyEmail => crate::mail::Email {
+            to: user.email.clone(),
+            subject: "Confirm your Relay address".to_string(),
+            body: format!(
+                "Someone registered this address with the Relay server at {base}.\n\n\
+                 Confirm it by opening:\n\n  {base}/auth/verify?token={}\n\n\
+                 The link works once and expires in 24 hours. If this was not \
+                 you, ignore this message — nothing happens until the link is \
+                 opened.\n",
+                token.token
+            ),
+        },
+        EmailTokenPurpose::ResetPassword => crate::mail::Email {
+            to: user.email.clone(),
+            subject: "Reset your Relay password".to_string(),
+            body: format!(
+                "Someone asked to reset the password for this address on the \
+                 Relay server at {base}.\n\n\
+                 Set a new one by opening:\n\n  {base}/auth/reset?token={}\n\n\
+                 The link works once and expires in an hour. If this was not \
+                 you, ignore this message — your current password still \
+                 works and nothing has changed.\n",
+                token.token
+            ),
+        },
+    };
+
+    // A provider outage must not fail the surrounding request: the token
+    // is already stored, and the user can ask again.
+    if let Err(error) = state.mailer.send(&message).await {
+        tracing::error!(%error, user = %user.id, "could not send a transactional e-mail");
+    }
+
+    Ok(())
+}
+
+/// Sends a fresh verification link, if the address is registered.
+pub async fn request_verification(state: &AppState, email: &str) -> ServerResult<()> {
+    use crate::store::EmailTokenPurpose;
+
+    let Some(stored) = state.store.find_user_by_email(email).await? else {
+        return Ok(());
+    };
+    if stored.profile.email_verified_at.is_some() {
+        return Ok(());
+    }
+
+    issue_email_token(state, &stored.profile, EmailTokenPurpose::VerifyEmail).await
+}
+
+/// Redeems a verification token.
+pub async fn confirm_verification(state: &AppState, token: &str) -> ServerResult<()> {
+    use crate::store::EmailTokenPurpose;
+
+    let now = Timestamp::now().as_millis();
+    let user_id = state
+        .store
+        .consume_email_token(
+            EmailTokenPurpose::VerifyEmail,
+            &auth::hash_token(token),
+            now,
+        )
+        .await?
+        .ok_or_else(|| {
+            ServerError::BadRequest("that link has expired or has already been used".into())
+        })?;
+
+    state.store.mark_email_verified(&user_id, now).await
+}
+
+/// Sends a password reset link, if the address is registered.
+pub async fn request_password_reset(state: &AppState, email: &str) -> ServerResult<()> {
+    use crate::store::EmailTokenPurpose;
+
+    let Some(stored) = state.store.find_user_by_email(email).await? else {
+        // Deliberately indistinguishable from success. Whether an address
+        // has an account here is not something a stranger gets to ask.
+        return Ok(());
+    };
+
+    issue_email_token(state, &stored.profile, EmailTokenPurpose::ResetPassword).await
+}
+
+/// Redeems a reset token and sets a new password.
+///
+/// Every existing session is dropped. Someone asking for a reset may be
+/// doing it *because* an attacker is signed in; leaving that session
+/// alive would make the reset pointless.
+pub async fn confirm_password_reset(
+    state: &AppState,
+    token: &str,
+    new_password: &str,
+) -> ServerResult<()> {
+    use crate::store::EmailTokenPurpose;
+
+    // Checked before the token is spent, so a user who fumbles the
+    // password rule can try again with the same link.
+    let hash = auth::hash_password(new_password)?;
+
+    let now = Timestamp::now().as_millis();
+    let user_id = state
+        .store
+        .consume_email_token(
+            EmailTokenPurpose::ResetPassword,
+            &auth::hash_token(token),
+            now,
+        )
+        .await?
+        .ok_or_else(|| {
+            ServerError::BadRequest("that link has expired or has already been used".into())
+        })?;
+
+    state.store.set_password_hash(&user_id, &hash).await?;
+
+    // Any other outstanding reset link is now stale.
+    state
+        .store
+        .clear_email_tokens(&user_id, EmailTokenPurpose::ResetPassword)
+        .await?;
+
+    let dropped = state.store.delete_sessions_for_user(&user_id).await?;
+    tracing::info!(user = %user_id, dropped, "password reset; signed out every device");
+
+    Ok(())
 }

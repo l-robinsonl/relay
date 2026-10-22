@@ -95,6 +95,74 @@ pub async fn logout(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// An address, for the endpoints that take nothing else.
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EmailRequest {
+    /// The address to send to.
+    pub email: String,
+}
+
+/// A token from an e-mailed link.
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TokenRequest {
+    /// The token as it appeared in the link.
+    pub token: String,
+}
+
+/// A token and the password to set with it.
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResetRequest {
+    /// The token as it appeared in the link.
+    pub token: String,
+    /// The new password.
+    pub password: String,
+}
+
+/// `POST /v1/auth/verify/request`
+///
+/// Always answers 204, whether or not the address is registered and
+/// whether or not a message went out. Anything else turns this endpoint
+/// into a way to ask who has an account here.
+pub async fn request_verification(
+    State(state): State<AppState>,
+    Json(body): Json<EmailRequest>,
+) -> ServerResult<StatusCode> {
+    crate::app::request_verification(&state, &body.email).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// `POST /v1/auth/verify/confirm`
+pub async fn confirm_verification(
+    State(state): State<AppState>,
+    Json(body): Json<TokenRequest>,
+) -> ServerResult<StatusCode> {
+    crate::app::confirm_verification(&state, &body.token).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// `POST /v1/auth/password/reset`
+///
+/// Answers 204 regardless, for the reason above.
+pub async fn request_password_reset(
+    State(state): State<AppState>,
+    Json(body): Json<EmailRequest>,
+) -> ServerResult<StatusCode> {
+    crate::app::request_password_reset(&state, &body.email).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// `POST /v1/auth/password/confirm`
+pub async fn confirm_password_reset(
+    State(state): State<AppState>,
+    Json(body): Json<ResetRequest>,
+) -> ServerResult<StatusCode> {
+    crate::app::confirm_password_reset(&state, &body.token, &body.password).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 // --- workspaces ------------------------------------------------------------
 
 /// A workspace as the API reports it.

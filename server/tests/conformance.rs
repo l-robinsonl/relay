@@ -21,9 +21,24 @@ async fn sqlite_store() -> Arc<dyn SyncStore> {
 }
 
 /// A Postgres store against a scratch schema, when one is configured.
+///
+/// Absent configuration means "do not test Postgres" and is fine.
+/// Configuration that does not work is a failure, loudly: this returned
+/// `None` on a connection error for months, so the whole suite quietly
+/// ran SQLite-only against a database that had been deleted, and every
+/// run still said it passed.
 async fn postgres_store() -> Option<Arc<dyn SyncStore>> {
     let url = std::env::var("RELAY_TEST_POSTGRES_URL").ok()?;
-    let store = PostgresStore::connect(&url).await.ok()?;
+    if url.trim().is_empty() {
+        return None;
+    }
+
+    let store = PostgresStore::connect(&url).await.unwrap_or_else(|e| {
+        panic!(
+            "RELAY_TEST_POSTGRES_URL is set but unusable, so these tests would \
+             silently cover SQLite only: {e}"
+        )
+    });
 
     // Tests share one database, so start from a clean slate each run.
     //
@@ -34,7 +49,11 @@ async fn postgres_store() -> Option<Arc<dyn SyncStore>> {
         .execute(store.pool())
         .await;
 
-    store.migrate().await.ok()?;
+    store
+        .migrate()
+        .await
+        .expect("the configured Postgres could not be migrated");
+
     Some(Arc::new(store))
 }
 
@@ -639,4 +658,326 @@ async fn workspaces_are_listed_only_for_their_members() {
         assert_eq!(bob_list[0].id, "w-bob");
     })
     .await;
+}
+
+// --- e-mailed tokens -------------------------------------------------------
+
+use relay_server::store::EmailTokenPurpose;
+
+/// A user plus the id a token is issued against.
+async fn seed_user_id(store: &Arc<dyn SyncStore>, email: &str) -> String {
+    seed_user(store, email).await.user_id
+}
+
+fn in_an_hour() -> i64 {
+    relay_models::Timestamp::now().as_millis() + 3_600_000
+}
+
+#[tokio::test]
+async fn a_token_is_redeemable_once() {
+    for_each_backend(|store| async move {
+        let user = seed_user_id(&store, "ada@example.com").await;
+
+        store
+            .create_email_token(
+                &user,
+                EmailTokenPurpose::VerifyEmail,
+                "hash-1",
+                in_an_hour(),
+            )
+            .await
+            .unwrap();
+
+        let now = relay_models::Timestamp::now().as_millis();
+        let first = store
+            .consume_email_token(EmailTokenPurpose::VerifyEmail, "hash-1", now)
+            .await
+            .unwrap();
+        assert_eq!(first.as_deref(), Some(user.as_str()));
+
+        // A link forwarded, cached by a scanner, or simply clicked twice
+        // must not work a second time.
+        let second = store
+            .consume_email_token(EmailTokenPurpose::VerifyEmail, "hash-1", now)
+            .await
+            .unwrap();
+        assert_eq!(second, None);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_token_issued_for_one_purpose_cannot_be_used_for_the_other() {
+    // Otherwise anyone able to read a verification mail — a shared
+    // mailbox, a mailing list, a forwarded message — could redeem it as
+    // a password reset and take the account.
+    for_each_backend(|store| async move {
+        let user = seed_user_id(&store, "ada@example.com").await;
+        let now = relay_models::Timestamp::now().as_millis();
+
+        store
+            .create_email_token(
+                &user,
+                EmailTokenPurpose::VerifyEmail,
+                "hash-x",
+                in_an_hour(),
+            )
+            .await
+            .unwrap();
+
+        let wrong = store
+            .consume_email_token(EmailTokenPurpose::ResetPassword, "hash-x", now)
+            .await
+            .unwrap();
+        assert_eq!(wrong, None, "a verification token reset a password");
+
+        // And it is still there for its actual purpose.
+        let right = store
+            .consume_email_token(EmailTokenPurpose::VerifyEmail, "hash-x", now)
+            .await
+            .unwrap();
+        assert_eq!(right.as_deref(), Some(user.as_str()));
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn an_expired_token_is_refused() {
+    for_each_backend(|store| async move {
+        let user = seed_user_id(&store, "ada@example.com").await;
+        let now = relay_models::Timestamp::now().as_millis();
+
+        store
+            .create_email_token(&user, EmailTokenPurpose::ResetPassword, "stale", now - 1)
+            .await
+            .unwrap();
+
+        let result = store
+            .consume_email_token(EmailTokenPurpose::ResetPassword, "stale", now)
+            .await
+            .unwrap();
+        assert_eq!(result, None);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn verification_is_recorded_on_the_user() {
+    for_each_backend(|store| async move {
+        let user = seed_user_id(&store, "ada@example.com").await;
+
+        let before = store
+            .find_user_by_email("ada@example.com")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(before.profile.email_verified_at, None);
+
+        store
+            .mark_email_verified(&user, 1_700_000_000_000)
+            .await
+            .unwrap();
+
+        let after = store
+            .find_user_by_email("ada@example.com")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            after.profile.email_verified_at.map(|t| t.as_millis()),
+            Some(1_700_000_000_000)
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn changing_a_password_signs_every_device_out() {
+    // Someone resetting a password may be doing it *because* an attacker
+    // holds a session. Leaving that session alive makes the reset
+    // pointless.
+    for_each_backend(|store| async move {
+        let user = seed_user_id(&store, "ada@example.com").await;
+
+        store
+            .create_session(&user, "session-a", in_an_hour())
+            .await
+            .unwrap();
+        store
+            .create_session(&user, "session-b", in_an_hour())
+            .await
+            .unwrap();
+
+        assert!(store.session_user("session-a").await.unwrap().is_some());
+
+        let dropped = store.delete_sessions_for_user(&user).await.unwrap();
+        assert_eq!(dropped, 2);
+
+        assert!(store.session_user("session-a").await.unwrap().is_none());
+        assert!(store.session_user("session-b").await.unwrap().is_none());
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn one_users_sessions_survive_anothers_reset() {
+    for_each_backend(|store| async move {
+        let ada = seed_user_id(&store, "ada@example.com").await;
+        let grace = seed_user_id(&store, "grace@example.com").await;
+
+        store
+            .create_session(&ada, "ada-s", in_an_hour())
+            .await
+            .unwrap();
+        store
+            .create_session(&grace, "grace-s", in_an_hour())
+            .await
+            .unwrap();
+
+        store.delete_sessions_for_user(&ada).await.unwrap();
+
+        assert!(store.session_user("ada-s").await.unwrap().is_none());
+        assert!(store.session_user("grace-s").await.unwrap().is_some());
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_new_password_hash_replaces_the_old_one() {
+    for_each_backend(|store| async move {
+        let user = seed_user_id(&store, "ada@example.com").await;
+
+        store
+            .set_password_hash(&user, "the-new-hash")
+            .await
+            .unwrap();
+
+        let stored = store
+            .find_user_by_email("ada@example.com")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.password_hash, "the-new-hash");
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn the_cooldown_can_see_when_the_last_token_went_out() {
+    for_each_backend(|store| async move {
+        let user = seed_user_id(&store, "ada@example.com").await;
+
+        assert_eq!(
+            store
+                .latest_email_token_at(&user, EmailTokenPurpose::VerifyEmail)
+                .await
+                .unwrap(),
+            None
+        );
+
+        store
+            .create_email_token(&user, EmailTokenPurpose::VerifyEmail, "h", in_an_hour())
+            .await
+            .unwrap();
+
+        let at = store
+            .latest_email_token_at(&user, EmailTokenPurpose::VerifyEmail)
+            .await
+            .unwrap();
+        assert!(at.is_some());
+
+        // Kept per purpose, so asking for a reset does not silence
+        // verification mail or the other way round.
+        assert_eq!(
+            store
+                .latest_email_token_at(&user, EmailTokenPurpose::ResetPassword)
+                .await
+                .unwrap(),
+            None
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn clearing_tokens_leaves_the_other_purpose_alone() {
+    for_each_backend(|store| async move {
+        let user = seed_user_id(&store, "ada@example.com").await;
+        let now = relay_models::Timestamp::now().as_millis();
+
+        store
+            .create_email_token(&user, EmailTokenPurpose::VerifyEmail, "v", in_an_hour())
+            .await
+            .unwrap();
+        store
+            .create_email_token(&user, EmailTokenPurpose::ResetPassword, "r", in_an_hour())
+            .await
+            .unwrap();
+
+        store
+            .clear_email_tokens(&user, EmailTokenPurpose::ResetPassword)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            store
+                .consume_email_token(EmailTokenPurpose::ResetPassword, "r", now)
+                .await
+                .unwrap(),
+            None
+        );
+        assert!(
+            store
+                .consume_email_token(EmailTokenPurpose::VerifyEmail, "v", now)
+                .await
+                .unwrap()
+                .is_some(),
+            "clearing reset tokens should not revoke a verification link"
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn deleting_a_user_takes_their_tokens_with_them() {
+    // The foreign key is ON DELETE CASCADE; without it a token would
+    // outlive its user and point at an id that could be reissued.
+    // Postgres only: the SQLite schema has no enforced foreign keys.
+    let Some(url) = std::env::var("RELAY_TEST_POSTGRES_URL").ok() else {
+        return;
+    };
+    let store = PostgresStore::connect(&url).await.unwrap();
+    let _ = sqlx::raw_sql("DROP SCHEMA IF EXISTS relay CASCADE")
+        .execute(store.pool())
+        .await;
+    store.migrate().await.unwrap();
+
+    let pool = store.pool().clone();
+    let store: Arc<dyn SyncStore> = Arc::new(store);
+    let user = seed_user_id(&store, "ada@example.com").await;
+
+    store
+        .create_email_token(
+            &user,
+            EmailTokenPurpose::VerifyEmail,
+            "doomed",
+            in_an_hour(),
+        )
+        .await
+        .unwrap();
+
+    sqlx::query("DELETE FROM relay.users WHERE id = $1")
+        .bind(&user)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let now = relay_models::Timestamp::now().as_millis();
+    assert_eq!(
+        store
+            .consume_email_token(EmailTokenPurpose::VerifyEmail, "doomed", now)
+            .await
+            .unwrap(),
+        None
+    );
 }

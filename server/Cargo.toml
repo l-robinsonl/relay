@@ -36,6 +36,9 @@ sha2 = "0.11"
 subtle = "2.6"
 base64.workspace = true
 futures-util.workspace = true
+# rustls, not OpenSSL: the server should build without a system TLS
+# library, same as the desktop engine.
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 
 [dependencies.sqlx]
 version = "0.9"

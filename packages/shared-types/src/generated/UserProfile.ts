@@ -7,4 +7,9 @@ import type { Timestamp } from "./Timestamp";
  * Carries no password hash, no session token and no e-mail verification
  * state: this is the shape that goes into a members list.
  */
-export type UserProfile = { id: string, email: string, displayName: string, isServerAdmin: boolean, createdAt: Timestamp, };
+export type UserProfile = { id: string, email: string, displayName: string, isServerAdmin: boolean, createdAt: Timestamp, 
+/**
+ * When the address was confirmed, if it has been. The client shows a
+ * prompt until it is, and the server may refuse to sign in without it.
+ */
+emailVerifiedAt?: Timestamp | null, };

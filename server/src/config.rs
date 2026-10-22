@@ -52,6 +52,15 @@ pub struct Config {
     pub admin_password: Option<String>,
     /// Largest request body accepted, in bytes.
     pub max_body_bytes: usize,
+    /// Resend API key. Absent means e-mail is logged, not sent.
+    pub resend_api_key: Option<String>,
+    /// The `From:` address, which the provider must have verified.
+    pub mail_from: Option<String>,
+    /// Whether an unverified account may sign in.
+    ///
+    /// Off by default so a self-hosted server with no mail provider
+    /// works out of the box. Relay Cloud turns it on.
+    pub require_verified_email: bool,
 }
 
 impl Config {
@@ -84,6 +93,14 @@ impl Config {
             admin_email: non_empty("RELAY_ADMIN_EMAIL"),
             admin_password: non_empty("RELAY_ADMIN_PASSWORD"),
             max_body_bytes: relay_sync::MAX_BATCH_BYTES + 64 * 1024,
+            // Both spellings: every other Relay variable is prefixed, but
+            // `RESEND_API_KEY` is what the provider's own dashboard and
+            // most deployment platforms hand you, and silently ignoring
+            // it would look exactly like a broken key.
+            resend_api_key: non_empty("RELAY_RESEND_API_KEY")
+                .or_else(|| non_empty("RESEND_API_KEY")),
+            mail_from: non_empty("RELAY_MAIL_FROM"),
+            require_verified_email: flag("RELAY_REQUIRE_VERIFIED_EMAIL", false),
         })
     }
 
@@ -91,6 +108,17 @@ impl Config {
     pub fn is_postgres(&self) -> bool {
         let url = self.database_url.trim_start();
         url.starts_with("postgres://") || url.starts_with("postgresql://")
+    }
+}
+
+/// Reads a boolean variable, accepting the spellings people actually use.
+fn flag(key: &str, default: bool) -> bool {
+    match non_empty(key) {
+        None => default,
+        Some(value) => matches!(
+            value.to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        ),
     }
 }
 
@@ -130,6 +158,9 @@ mod tests {
             admin_email: None,
             admin_password: None,
             max_body_bytes: 1024,
+            resend_api_key: None,
+            mail_from: None,
+            require_verified_email: false,
         };
 
         assert!(base("postgres://host/db").is_postgres());

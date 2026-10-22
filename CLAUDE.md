@@ -33,6 +33,7 @@ Phases 1–3 complete. Phase 4 mostly. Phase 5 part-done.
 | TLS | per-request verification toggle, client certificates with host matching, proxies — all reachable from Settings |
 | Packaging | `.deb` / `.rpm` / `.AppImage` build |
 | CI | GitHub Actions: Rust + desktop build on Linux/macOS/Windows, frontend, bindings drift, dependency audit |
+| Accounts | e-mail confirmation and password reset, single-use hashed tokens, Resend or log-only |
 
 | Not built | |
 |---|---|
@@ -115,6 +116,21 @@ Run it: `npm run tauri dev`, or the built binary at
   library anyone builds against, so the promise cost nothing to raise.
   Raising it also makes clippy enforce let-chains, which is why
   `interpolate.rs` uses one.
+- **A configured-but-broken Postgres must fail, not skip.**
+  `postgres_store()` in the conformance suite used to `.ok()?` on a
+  connection error, so a wrong `RELAY_TEST_POSTGRES_URL` meant every
+  test quietly ran SQLite-only and still reported success. It now
+  panics. Absent configuration still skips; that part is fine.
+- **An e-mailed token is scoped to its purpose.** A confirmation token
+  must never redeem as a password reset — otherwise reading a
+  verification mail is enough to take the account. The purpose is part
+  of the `DELETE … RETURNING` predicate, not a label beside it.
+- **`ServerError::Internal` hides its detail from the log too.** Its
+  `Display` is the literal string "internal error", so
+  `tracing::error!(%error)` records nothing useful. `ServerError::Mail`
+  exists because of this: a provider's refusal ("domain not verified")
+  is the operator's only clue and contains no schema or query detail.
+  Think twice before routing a new failure through `Internal`.
 - **rusqlite pinned to 0.39.** 0.40 needs libsqlite3-sys 0.38; sqlx-sqlite
   needs <0.38; both link native sqlite3. Do not bump without checking.
 
@@ -151,8 +167,19 @@ Run it: `npm run tauri dev`, or the built binary at
 - Rust via rustup, **not on PATH** — `. "$HOME/.cargo/env"` first.
 - `.env.local` (gitignored) holds `NEON_API_KEY`, `NEON_ORG_ID`,
   `NEON_PROJECT_ID`, `DATABASE_URL` (the user's *other* app — do not
-  touch), `RELAY_DATABASE_URL` (Relay's own `relay` database), and
-  `RESEND_API_KEY` (unused so far).
+  touch), `RELAY_DATABASE_URL` (Relay's own `relay` database) and
+  `RESEND_API_KEY`.
+- **Two Neon projects, and they are easy to confuse.** `NEON_PROJECT_ID`
+  is project **postbox** (`REDACTED-neon-project`), endpoint
+  `REDACTED-neon-endpoint`, host suffix **c-7** — that is Relay's. The
+  other app lives on `REDACTED-other-endpoint`, suffix **c-8**, which
+  is also where the Neon Auth JWKS endpoint is. `RELAY_DATABASE_URL`
+  once pointed at the c-8 host with dbname `relay`, a database that
+  exists only on c-7, so every Postgres test silently skipped.
+- The verified Resend sending domain is **REDACTED-mail-domain**; use
+  something like `relay@REDACTED-mail-domain` for `RELAY_MAIL_FROM`.
+  `delivered@resend.dev` is Resend's sink — send test mail there, never
+  to a real person.
 - Neon CLI authenticated as profile `agent`. `neon profile create agent --mint`
   is how it got there; project settings → Credentials issues S3 keys, not
   management keys.

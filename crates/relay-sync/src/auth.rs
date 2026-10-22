@@ -77,6 +77,10 @@ pub struct UserProfile {
     #[serde(default)]
     pub is_server_admin: bool,
     pub created_at: Timestamp,
+    /// When the address was confirmed, if it has been. The client shows a
+    /// prompt until it is, and the server may refuse to sign in without it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub email_verified_at: Option<Timestamp>,
 }
 
 /// Credentials submitted to sign in.
@@ -160,6 +164,7 @@ mod tests {
             display_name: "Ada".into(),
             is_server_admin: false,
             created_at: Timestamp(1),
+            email_verified_at: None,
         };
         let json = serde_json::to_value(&profile).unwrap();
 

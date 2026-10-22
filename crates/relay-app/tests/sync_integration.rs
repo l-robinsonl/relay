@@ -43,6 +43,9 @@ async fn start_server() -> Server {
         admin_email: None,
         admin_password: None,
         max_body_bytes: relay_sync::MAX_BATCH_BYTES + 65536,
+        resend_api_key: None,
+        mail_from: None,
+        require_verified_email: false,
     };
 
     let state = AppState::new(Arc::new(store), config);

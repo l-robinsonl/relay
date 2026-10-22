@@ -17,6 +17,8 @@ struct TestServer {
     base: String,
     client: reqwest::Client,
     handle: tokio::task::JoinHandle<()>,
+    /// What the server tried to e-mail.
+    mail: Arc<relay_server::mail::CapturingMailer>,
 }
 
 impl Drop for TestServer {
@@ -126,9 +128,39 @@ async fn start(signup: SignupMode) -> TestServer {
         admin_email: None,
         admin_password: None,
         max_body_bytes: relay_sync::MAX_BATCH_BYTES + 65536,
+        resend_api_key: None,
+        mail_from: None,
+        require_verified_email: false,
     };
 
-    let state = AppState::new(Arc::new(store), config);
+    start_with(store, config).await
+}
+
+/// Starts a server that refuses sign-in until the address is confirmed.
+async fn start_requiring_verification() -> TestServer {
+    let store = SqliteStore::connect("sqlite::memory:").await.unwrap();
+    store.migrate().await.unwrap();
+
+    let config = Config {
+        database_url: "sqlite::memory:".into(),
+        bind: "127.0.0.1:0".parse().unwrap(),
+        public_url: "https://relay.test".into(),
+        signup_mode: SignupMode::Open,
+        session_ttl: std::time::Duration::from_secs(3600),
+        admin_email: None,
+        admin_password: None,
+        max_body_bytes: relay_sync::MAX_BATCH_BYTES + 65536,
+        resend_api_key: None,
+        mail_from: None,
+        require_verified_email: true,
+    };
+
+    start_with(store, config).await
+}
+
+async fn start_with(store: SqliteStore, config: Config) -> TestServer {
+    let mail = Arc::new(relay_server::mail::CapturingMailer::new());
+    let state = AppState::with_mailer(Arc::new(store), config, mail.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
 
@@ -140,6 +172,7 @@ async fn start(signup: SignupMode) -> TestServer {
         base: format!("http://{addr}"),
         client: reqwest::Client::new(),
         handle,
+        mail,
     }
 }
 
@@ -727,4 +760,377 @@ async fn the_websocket_refuses_an_unauthenticated_handshake() {
 
     let request = ws_request(&server.base, "/v1/workspaces/w1/ws", "not-a-token");
     assert!(tokio_tungstenite::connect_async(request).await.is_err());
+}
+
+// --- verification and password reset ---------------------------------------
+
+/// Pulls the token out of a link in an e-mail body.
+fn token_in(body: &str) -> String {
+    body.split("token=")
+        .nth(1)
+        .unwrap_or_else(|| panic!("no token in the message:\n{body}"))
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .to_string()
+}
+
+#[tokio::test]
+async fn registering_sends_a_verification_link() {
+    let server = start(SignupMode::Open).await;
+    server.sign_up("ada@example.com").await;
+
+    let sent = server.mail.sent();
+    assert_eq!(sent.len(), 1, "expected one message, got {sent:?}");
+    assert_eq!(sent[0].to, "ada@example.com");
+    assert!(sent[0].subject.to_lowercase().contains("confirm"));
+    assert!(
+        sent[0].body.contains("/auth/verify?token="),
+        "{}",
+        sent[0].body
+    );
+}
+
+#[tokio::test]
+async fn confirming_marks_the_address_verified() {
+    let server = start(SignupMode::Open).await;
+    let token = server.sign_up("ada@example.com").await;
+
+    let link = token_in(&server.mail.last().unwrap().body);
+    let response = server
+        .post("/v1/auth/verify/confirm", json!({ "token": link }))
+        .await;
+    assert_eq!(response.status(), 204);
+
+    let me: Value = server
+        .get_auth("/v1/auth/me", &token)
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        me["emailVerifiedAt"].is_number(),
+        "the profile should report verification: {me}"
+    );
+}
+
+#[tokio::test]
+async fn a_verification_link_works_only_once() {
+    let server = start(SignupMode::Open).await;
+    server.sign_up("ada@example.com").await;
+    let link = token_in(&server.mail.last().unwrap().body);
+
+    assert_eq!(
+        server
+            .post("/v1/auth/verify/confirm", json!({ "token": link }))
+            .await
+            .status(),
+        204
+    );
+    assert_eq!(
+        server
+            .post("/v1/auth/verify/confirm", json!({ "token": link }))
+            .await
+            .status(),
+        400
+    );
+}
+
+#[tokio::test]
+async fn a_forged_token_is_refused() {
+    let server = start(SignupMode::Open).await;
+    server.sign_up("ada@example.com").await;
+
+    let response = server
+        .post(
+            "/v1/auth/verify/confirm",
+            json!({ "token": "not-a-real-token" }),
+        )
+        .await;
+    assert_eq!(response.status(), 400);
+}
+
+#[tokio::test]
+async fn an_unverified_user_cannot_sign_in_when_the_server_requires_it() {
+    let server = start_requiring_verification().await;
+
+    assert!(
+        server
+            .post(
+                "/v1/auth/register",
+                json!({ "email": "ada@example.com", "password": "correct horse battery" }),
+            )
+            .await
+            .status()
+            .is_success()
+    );
+
+    let response = server
+        .post(
+            "/v1/auth/login",
+            json!({ "email": "ada@example.com", "password": "correct horse battery" }),
+        )
+        .await;
+    assert_eq!(response.status(), 403);
+
+    // And once confirmed, they can.
+    let link = token_in(&server.mail.last().unwrap().body);
+    server
+        .post("/v1/auth/verify/confirm", json!({ "token": link }))
+        .await;
+
+    let response = server
+        .post(
+            "/v1/auth/login",
+            json!({ "email": "ada@example.com", "password": "correct horse battery" }),
+        )
+        .await;
+    assert_eq!(response.status(), 200);
+}
+
+#[tokio::test]
+async fn a_wrong_password_still_reads_as_unauthenticated_not_unverified() {
+    // The verification check sits after the password check, so it never
+    // tells someone without the password that an address is registered.
+    let server = start_requiring_verification().await;
+    server
+        .post(
+            "/v1/auth/register",
+            json!({ "email": "ada@example.com", "password": "correct horse battery" }),
+        )
+        .await;
+
+    let response = server
+        .post(
+            "/v1/auth/login",
+            json!({ "email": "ada@example.com", "password": "wrong" }),
+        )
+        .await;
+    assert_eq!(
+        response.status(),
+        401,
+        "403 would confirm the address exists"
+    );
+}
+
+#[tokio::test]
+async fn asking_to_verify_an_unknown_address_looks_the_same_as_a_known_one() {
+    let server = start(SignupMode::Open).await;
+    server.sign_up("ada@example.com").await;
+    server.mail.clear();
+
+    let known = server
+        .post(
+            "/v1/auth/verify/request",
+            json!({ "email": "ada@example.com" }),
+        )
+        .await;
+    let unknown = server
+        .post(
+            "/v1/auth/verify/request",
+            json!({ "email": "nobody@example.com" }),
+        )
+        .await;
+
+    assert_eq!(known.status(), 204);
+    assert_eq!(unknown.status(), unknown.status());
+    assert_eq!(
+        known.status(),
+        unknown.status(),
+        "the two must be indistinguishable"
+    );
+}
+
+#[tokio::test]
+async fn a_password_can_be_reset_through_the_e_mailed_link() {
+    let server = start(SignupMode::Open).await;
+    server.sign_up("ada@example.com").await;
+    server.mail.clear();
+
+    assert_eq!(
+        server
+            .post(
+                "/v1/auth/password/reset",
+                json!({ "email": "ada@example.com" })
+            )
+            .await
+            .status(),
+        204
+    );
+
+    let message = server.mail.last().expect("a reset message");
+    assert!(message.subject.to_lowercase().contains("reset"));
+    let link = token_in(&message.body);
+
+    assert_eq!(
+        server
+            .post(
+                "/v1/auth/password/confirm",
+                json!({ "token": link, "password": "a brand new passphrase" }),
+            )
+            .await
+            .status(),
+        204
+    );
+
+    // The new password works and the old one does not.
+    assert_eq!(
+        server
+            .post(
+                "/v1/auth/login",
+                json!({ "email": "ada@example.com", "password": "a brand new passphrase" }),
+            )
+            .await
+            .status(),
+        200
+    );
+    assert_eq!(
+        server
+            .post(
+                "/v1/auth/login",
+                json!({ "email": "ada@example.com", "password": "correct horse battery" }),
+            )
+            .await
+            .status(),
+        401
+    );
+}
+
+#[tokio::test]
+async fn resetting_a_password_signs_existing_sessions_out() {
+    // Someone resets a password precisely when they fear another party
+    // holds a session. That session must not survive it.
+    let server = start(SignupMode::Open).await;
+    let attacker_token = server.sign_up("ada@example.com").await;
+    assert_eq!(
+        server
+            .get_auth("/v1/auth/me", &attacker_token)
+            .await
+            .status(),
+        200
+    );
+
+    server.mail.clear();
+    server
+        .post(
+            "/v1/auth/password/reset",
+            json!({ "email": "ada@example.com" }),
+        )
+        .await;
+    let link = token_in(&server.mail.last().unwrap().body);
+
+    server
+        .post(
+            "/v1/auth/password/confirm",
+            json!({ "token": link, "password": "a brand new passphrase" }),
+        )
+        .await;
+
+    assert_eq!(
+        server
+            .get_auth("/v1/auth/me", &attacker_token)
+            .await
+            .status(),
+        401,
+        "the session outlived the reset"
+    );
+}
+
+#[tokio::test]
+async fn a_reset_link_works_only_once() {
+    let server = start(SignupMode::Open).await;
+    server.sign_up("ada@example.com").await;
+    server.mail.clear();
+
+    server
+        .post(
+            "/v1/auth/password/reset",
+            json!({ "email": "ada@example.com" }),
+        )
+        .await;
+    let link = token_in(&server.mail.last().unwrap().body);
+
+    let body = json!({ "token": link, "password": "a brand new passphrase" });
+    assert_eq!(
+        server
+            .post("/v1/auth/password/confirm", body.clone())
+            .await
+            .status(),
+        204
+    );
+    assert_eq!(
+        server
+            .post("/v1/auth/password/confirm", body)
+            .await
+            .status(),
+        400
+    );
+}
+
+#[tokio::test]
+async fn a_verification_token_cannot_reset_a_password() {
+    // The two are separate purposes in the store. If they were not,
+    // anyone who could read a verification e-mail could take the account.
+    let server = start(SignupMode::Open).await;
+    server.sign_up("ada@example.com").await;
+    let verification = token_in(&server.mail.last().unwrap().body);
+
+    let response = server
+        .post(
+            "/v1/auth/password/confirm",
+            json!({ "token": verification, "password": "attacker chosen" }),
+        )
+        .await;
+    assert_eq!(response.status(), 400);
+
+    // The original password still works.
+    assert_eq!(
+        server
+            .post(
+                "/v1/auth/login",
+                json!({ "email": "ada@example.com", "password": "correct horse battery" }),
+            )
+            .await
+            .status(),
+        200
+    );
+}
+
+#[tokio::test]
+async fn asking_for_a_reset_for_an_unknown_address_reveals_nothing() {
+    let server = start(SignupMode::Open).await;
+    server.mail.clear();
+
+    let response = server
+        .post(
+            "/v1/auth/password/reset",
+            json!({ "email": "nobody@example.com" }),
+        )
+        .await;
+
+    assert_eq!(response.status(), 204, "a 404 here enumerates accounts");
+    assert!(server.mail.sent().is_empty());
+}
+
+#[tokio::test]
+async fn repeated_requests_within_the_cooldown_send_one_message() {
+    // Without this the endpoint is a way to post mail at any address.
+    let server = start(SignupMode::Open).await;
+    server.sign_up("ada@example.com").await;
+    server.mail.clear();
+
+    for _ in 0..5 {
+        server
+            .post(
+                "/v1/auth/password/reset",
+                json!({ "email": "ada@example.com" }),
+            )
+            .await;
+    }
+
+    assert_eq!(
+        server.mail.sent().len(),
+        1,
+        "the cooldown should have suppressed the rest"
+    );
 }

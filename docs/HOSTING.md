@@ -135,6 +135,10 @@ All of it is under `/v1`, with `/health` outside for load balancers.
 |---|---|---|
 | `GET` | `/health` | anyone |
 | `POST` | `/v1/auth/register` | anyone, subject to `RELAY_SIGNUP_MODE` |
+| `POST` | `/v1/auth/verify/request` | anyone; always 204 |
+| `POST` | `/v1/auth/verify/confirm` | anyone with the token |
+| `POST` | `/v1/auth/password/reset` | anyone; always 204 |
+| `POST` | `/v1/auth/password/confirm` | anyone with the token |
 | `POST` | `/v1/auth/login` | anyone |
 | `GET` | `/v1/auth/me` | any signed-in user |
 | `POST` | `/v1/auth/logout` | any signed-in user |
@@ -219,3 +223,38 @@ RELAY_DATABASE_URL=sqlite://data/relay.db relay-server
 No Postgres, no external identity provider, no licence check, no Relay
 Cloud account. That is the point: hosting it yourself must cost nothing and
 depend on nobody.
+
+## E-mail
+
+Relay sends two kinds of message: confirm your address, and reset your
+password. Both are plain text and both contain a single-use link.
+
+**Without a mail provider the server still works.** The default mailer
+writes the message to the log instead of sending it, so a small
+self-hosted deployment needs no e-mail account at all — an operator who
+needs a link fetches it from the log. Set `RELAY_REQUIRE_VERIFIED_EMAIL`
+only once mail is genuinely being delivered, or the first person to
+register cannot get in.
+
+To send for real, set `RESEND_API_KEY` (or `RELAY_RESEND_API_KEY`) and
+`RELAY_MAIL_FROM`. The from-address must be on a domain verified with
+Resend; anything else is refused on every send, and the refusal is
+logged with the provider's own explanation.
+
+### What the tokens guarantee
+
+- **Hashed at rest.** Only the SHA-256 of a token is stored, exactly as
+  for session tokens. A leaked database dump contains nothing that can
+  be presented to the server.
+- **Single use.** Redeeming is one `DELETE … RETURNING`, so a link
+  presented twice concurrently is honoured once.
+- **Scoped to a purpose.** A confirmation token cannot be redeemed to
+  set a password. Otherwise anyone who could read a verification e-mail
+  — a shared mailbox, a forwarded message — could take the account.
+- **Short-lived.** Confirmation lasts 24 hours, a reset one hour.
+- **A reset signs every device out.** People reset a password precisely
+  when they suspect somebody else holds a session.
+- **No account enumeration.** Asking to verify or reset an unknown
+  address returns exactly what a known one returns, and sends nothing.
+  A repeat request within a minute is silently suppressed rather than
+  rate-limit-errored, because an error would itself confirm the address.
