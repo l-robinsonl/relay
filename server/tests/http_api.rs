@@ -122,7 +122,10 @@ async fn start(signup: SignupMode) -> TestServer {
     let config = Config {
         database_url: "sqlite::memory:".into(),
         bind: "127.0.0.1:0".parse().unwrap(),
-        public_url: String::new(),
+        // Never empty in production — `Config::from_env` falls back to
+        // the bind address — so a fixture that left it blank produced
+        // relative links no test would notice were wrong.
+        public_url: "https://relay.test".into(),
         signup_mode: signup,
         session_ttl: std::time::Duration::from_secs(3600),
         admin_email: None,
@@ -1133,4 +1136,201 @@ async fn repeated_requests_within_the_cooldown_send_one_message() {
         1,
         "the cooldown should have suppressed the rest"
     );
+}
+
+// --- following the link, as a person would --------------------------------
+
+/// The whole link out of a message body, not just its token.
+fn link_in(body: &str) -> String {
+    body.split_whitespace()
+        .find(|word| word.contains("/auth/"))
+        .unwrap_or_else(|| panic!("no link in the message:\n{body}"))
+        .to_string()
+}
+
+#[tokio::test]
+async fn the_verification_link_in_the_e_mail_actually_works() {
+    // Every other test posts to the JSON API. This one follows the URL
+    // the recipient is given, which is the only thing they can do, and
+    // is how a 404 in a shipped feature goes unnoticed.
+    let server = start(SignupMode::Open).await;
+    let token = server.sign_up("ada@example.com").await;
+
+    let link = link_in(&server.mail.last().unwrap().body);
+    assert!(
+        link.starts_with("https://relay.test/auth/verify?token="),
+        "{link}"
+    );
+
+    // Point it at the test server rather than the configured origin.
+    let path = link.strip_prefix("https://relay.test").unwrap();
+    let response = server.get(path).await;
+
+    assert_eq!(response.status(), 200, "the e-mailed link 404s");
+    let html = response.text().await.unwrap();
+    assert!(html.contains("Address confirmed"), "{html}");
+
+    let me: Value = server
+        .get_auth("/v1/auth/me", &token)
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert!(me["emailVerifiedAt"].is_number(), "{me}");
+}
+
+#[tokio::test]
+async fn a_spent_verification_link_explains_itself_rather_than_erroring() {
+    let server = start(SignupMode::Open).await;
+    server.sign_up("ada@example.com").await;
+    let path = link_in(&server.mail.last().unwrap().body)
+        .strip_prefix("https://relay.test")
+        .unwrap()
+        .to_string();
+
+    server.get(&path).await;
+    let second = server.get(&path).await;
+
+    assert_eq!(second.status(), 200);
+    let html = second.text().await.unwrap();
+    assert!(html.contains("no longer works"), "{html}");
+}
+
+#[tokio::test]
+async fn the_reset_link_shows_a_form_and_changes_nothing() {
+    let server = start(SignupMode::Open).await;
+    server.sign_up("ada@example.com").await;
+    server.mail.clear();
+    server
+        .post(
+            "/v1/auth/password/reset",
+            json!({ "email": "ada@example.com" }),
+        )
+        .await;
+
+    let path = link_in(&server.mail.last().unwrap().body)
+        .strip_prefix("https://relay.test")
+        .unwrap()
+        .to_string();
+
+    let html = server.get(&path).await.text().await.unwrap();
+    assert!(html.contains("<form"), "{html}");
+    assert!(html.contains("method=\"post\""));
+
+    // Loading the page must not have spent the token: a link scanner
+    // following it would otherwise lock the user out of their own reset.
+    let original_still_works = server
+        .post(
+            "/v1/auth/login",
+            json!({ "email": "ada@example.com", "password": "correct horse battery" }),
+        )
+        .await;
+    assert_eq!(original_still_works.status(), 200);
+
+    let again = server.get(&path).await.text().await.unwrap();
+    assert!(again.contains("<form"), "the form vanished after one view");
+}
+
+#[tokio::test]
+async fn submitting_the_reset_form_changes_the_password() {
+    let server = start(SignupMode::Open).await;
+    server.sign_up("ada@example.com").await;
+    server.mail.clear();
+    server
+        .post(
+            "/v1/auth/password/reset",
+            json!({ "email": "ada@example.com" }),
+        )
+        .await;
+    let token = token_in(&server.mail.last().unwrap().body);
+
+    let response = server
+        .client
+        .post(server.url("/auth/reset"))
+        .form(&[
+            ("token", token.as_str()),
+            ("password", "a brand new passphrase"),
+            ("confirm", "a brand new passphrase"),
+        ])
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), 200);
+    assert!(response.text().await.unwrap().contains("Password changed"));
+
+    assert_eq!(
+        server
+            .post(
+                "/v1/auth/login",
+                json!({ "email": "ada@example.com", "password": "a brand new passphrase" }),
+            )
+            .await
+            .status(),
+        200
+    );
+}
+
+#[tokio::test]
+async fn mismatched_passwords_are_caught_before_the_token_is_spent() {
+    let server = start(SignupMode::Open).await;
+    server.sign_up("ada@example.com").await;
+    server.mail.clear();
+    server
+        .post(
+            "/v1/auth/password/reset",
+            json!({ "email": "ada@example.com" }),
+        )
+        .await;
+    let token = token_in(&server.mail.last().unwrap().body);
+
+    let typo = server
+        .client
+        .post(server.url("/auth/reset"))
+        .form(&[
+            ("token", token.as_str()),
+            ("password", "a brand new passphrase"),
+            ("confirm", "a brand new passphrasr"),
+        ])
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+
+    assert!(typo.contains("did not match"), "{typo}");
+
+    // And the link still works, rather than being burned by a typo.
+    let retry = server
+        .client
+        .post(server.url("/auth/reset"))
+        .form(&[
+            ("token", token.as_str()),
+            ("password", "a brand new passphrase"),
+            ("confirm", "a brand new passphrase"),
+        ])
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+
+    assert!(retry.contains("Password changed"), "{retry}");
+}
+
+#[tokio::test]
+async fn a_crafted_token_cannot_inject_markup_into_the_page() {
+    let server = start(SignupMode::Open).await;
+
+    let html = server
+        .get("/auth/reset?token=%22%3E%3Cscript%3Ealert(1)%3C/script%3E")
+        .await
+        .text()
+        .await
+        .unwrap();
+
+    assert!(!html.contains("<script>"), "{html}");
+    assert!(html.contains("&lt;script&gt;"));
 }

@@ -47,5 +47,7 @@ features = ["runtime-tokio", "tls-rustls-aws-lc-rs", "sqlite", "postgres", "json
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }
-reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+# `form` is for the reset page, which is an HTML form post rather than
+# the JSON every other endpoint takes.
+reqwest = { version = "0.13", default-features = false, features = ["json", "form", "rustls"] }
 tokio-tungstenite = "0.28"

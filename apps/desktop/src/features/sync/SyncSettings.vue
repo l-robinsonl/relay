@@ -23,8 +23,37 @@ const connecting = ref(false)
 const health = ref<ServerHealth | null>(null)
 const probeError = ref<string | null>(null)
 
+/** Signing in to an account, or making one. */
+const mode = ref<'signIn' | 'register'>('signIn')
+const displayName = ref('')
+const busy = ref<'' | 'register' | 'verify' | 'reset'>('')
+const notice = ref<string | null>(null)
+const authError = ref<string | null>(null)
+/** Set when the server says the address is registered but unconfirmed. */
+const unverified = ref(false)
+
+function messageOf (error: unknown): string {
+  if (error && typeof error === 'object' && 'message' in error) {
+    const detail = 'detail' in error ? (error as { detail?: string | null }).detail : null
+    const message = String((error as { message: unknown }).message)
+    return detail ? `${message} — ${detail}` : message
+  }
+  return String(error)
+}
+
+/** Clears whatever the last attempt said, before the next one. */
+function resetFeedback () {
+  notice.value = null
+  authError.value = null
+}
+
 const canConnect = computed(
   () => health.value !== null && email.value.trim() !== '' && password.value !== '',
+)
+
+/** Registration asks for a longer password, as the reset page does. */
+const canRegister = computed(
+  () => health.value !== null && email.value.trim() !== '' && password.value.length >= 12,
 )
 
 watch(
@@ -34,8 +63,12 @@ watch(
     serverUrl.value = sync.status.serverUrl ?? ''
     email.value = sync.status.userEmail ?? ''
     password.value = ''
+    displayName.value = ''
     health.value = null
     probeError.value = null
+    mode.value = 'signIn'
+    unverified.value = false
+    resetFeedback()
   },
 )
 
@@ -61,6 +94,8 @@ async function probe () {
 
 async function connect () {
   connecting.value = true
+  resetFeedback()
+  unverified.value = false
   try {
     const ok = await sync.connect(
       serverUrl.value.trim(),
@@ -70,9 +105,68 @@ async function connect () {
     )
     // The password is not kept a moment longer than needed.
     password.value = ''
-    if (ok) emit('close')
+    if (ok) {
+      emit('close')
+    } else if ((sync.status.lastError ?? '').toLowerCase().includes('confirm your e-mail')) {
+      // The password was right; only the address is unconfirmed. Offer
+      // the way out rather than leaving them to re-type a good password.
+      unverified.value = true
+    }
   } finally {
     connecting.value = false
+  }
+}
+
+async function register () {
+  busy.value = 'register'
+  resetFeedback()
+  try {
+    const profile = await api.syncRegister(
+      serverUrl.value.trim(),
+      email.value.trim(),
+      password.value,
+      displayName.value.trim(),
+    )
+    if (profile.emailVerifiedAt) {
+      notice.value = 'Account created. Sign in below.'
+    } else {
+      notice.value =
+        'Account created. Check your e-mail for a confirmation link, then sign in.'
+      unverified.value = true
+    }
+    mode.value = 'signIn'
+  } catch (error) {
+    authError.value = messageOf(error)
+  } finally {
+    busy.value = ''
+  }
+}
+
+async function resendVerification () {
+  busy.value = 'verify'
+  resetFeedback()
+  try {
+    await api.syncRequestVerification(serverUrl.value.trim(), email.value.trim())
+    notice.value = 'If that address has an account, another link is on its way.'
+  } catch (error) {
+    authError.value = messageOf(error)
+  } finally {
+    busy.value = ''
+  }
+}
+
+async function forgotPassword () {
+  busy.value = 'reset'
+  resetFeedback()
+  try {
+    await api.syncRequestPasswordReset(serverUrl.value.trim(), email.value.trim())
+    // Worded so it says the same thing whether or not the address is
+    // registered, which is what the server does too.
+    notice.value = 'If that address has an account, a reset link is on its way.'
+  } catch (error) {
+    authError.value = messageOf(error)
+  } finally {
+    busy.value = ''
   }
 }
 
@@ -215,6 +309,28 @@ async function disconnect () {
             </div>
 
             <template v-if="health">
+              <div class="flex gap-1 rounded-md border border-subtle p-0.5" role="tablist">
+                <button
+                  v-for="item in [
+                    { id: 'signIn', label: 'I have an account' },
+                    { id: 'register', label: 'Create one' },
+                  ]"
+                  :key="item.id"
+                  type="button"
+                  role="tab"
+                  class="flex-1 rounded px-2 py-1 text-xs transition-colors"
+                  :class="
+                    mode === item.id
+                      ? 'bg-[var(--surface-raised)] text-primary'
+                      : 'text-muted hover:text-secondary'
+                  "
+                  :aria-selected="mode === item.id"
+                  @click="mode = item.id as 'signIn' | 'register'; resetFeedback()"
+                >
+                  {{ item.label }}
+                </button>
+              </div>
+
               <div>
                 <label for="sync-email" class="mb-1 block text-xs font-medium text-secondary">
                   E-mail
@@ -226,6 +342,19 @@ async function disconnect () {
                   class="input"
                   autocomplete="username"
                   spellcheck="false"
+                />
+              </div>
+
+              <div v-if="mode === 'register'">
+                <label for="sync-name" class="mb-1 block text-xs font-medium text-secondary">
+                  Display name <span class="font-normal text-muted">(optional)</span>
+                </label>
+                <input
+                  id="sync-name"
+                  v-model="displayName"
+                  class="input"
+                  placeholder="What teammates see"
+                  autocomplete="name"
                 />
               </div>
 
@@ -241,12 +370,67 @@ async function disconnect () {
                   v-model="password"
                   type="password"
                   class="input"
-                  autocomplete="current-password"
-                  @keydown.enter.prevent="canConnect && connect()"
+                  :autocomplete="mode === 'register' ? 'new-password' : 'current-password'"
+                  @keydown.enter.prevent="
+                    mode === 'register' ? canRegister && register() : canConnect && connect()
+                  "
                 />
+                <p v-if="mode === 'register'" class="mt-1 text-xs text-muted">
+                  Twelve characters or more. A phrase you can remember beats a short
+                  tangle you cannot.
+                </p>
+                <button
+                  v-else
+                  type="button"
+                  class="mt-1 text-xs text-muted underline-offset-2 hover:underline"
+                  :disabled="busy !== '' || !email.trim()"
+                  @click="forgotPassword"
+                >
+                  Forgotten your password?
+                </button>
               </div>
 
-              <label class="flex cursor-pointer items-start gap-2 text-xs text-secondary">
+              <!-- Shown when the password was right but the address is
+                   unconfirmed: re-typing a correct password will not help. -->
+              <div
+                v-if="unverified"
+                class="rounded-md border p-2.5 text-xs"
+                :style="{ borderColor: 'var(--accent)', color: 'var(--text-secondary)' }"
+              >
+                <p class="mb-1.5">
+                  This address has not been confirmed yet. Open the link Relay e-mailed
+                  you, then sign in.
+                </p>
+                <button
+                  type="button"
+                  class="btn text-xs"
+                  :disabled="busy !== '' || !email.trim()"
+                  @click="resendVerification"
+                >
+                  <Loader2 v-if="busy === 'verify'" :size="13" class="animate-spin" />
+                  Send another link
+                </button>
+              </div>
+
+              <p
+                v-if="notice"
+                class="text-xs"
+                :style="{ color: 'var(--success)' }"
+              >
+                {{ notice }}
+              </p>
+              <p
+                v-if="authError"
+                class="text-xs"
+                :style="{ color: 'var(--danger)' }"
+              >
+                {{ authError }}
+              </p>
+
+              <label
+                v-if="mode === 'signIn'"
+                class="flex cursor-pointer items-start gap-2 text-xs text-secondary"
+              >
                 <input
                   v-model="join"
                   type="checkbox"
@@ -273,6 +457,17 @@ async function disconnect () {
               </div>
 
               <button
+                v-if="mode === 'register'"
+                type="button"
+                class="btn btn-primary w-full text-xs"
+                :disabled="!canRegister || busy !== ''"
+                @click="register"
+              >
+                <Loader2 v-if="busy === 'register'" :size="13" class="animate-spin" />
+                Create the account
+              </button>
+              <button
+                v-else
                 type="button"
                 class="btn btn-primary w-full text-xs"
                 :disabled="!canConnect || connecting"

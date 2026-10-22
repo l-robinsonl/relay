@@ -666,3 +666,37 @@ pub fn oauth_forget_token(service: State<'_, RelayService>, config: OAuth2Config
 pub fn oauth_forget_all_tokens(service: State<'_, RelayService>) {
     service.oauth_forget_all_tokens();
 }
+
+/// Creates an account on a sync server.
+#[tauri::command]
+pub async fn sync_register(
+    service: State<'_, RelayService>,
+    server_url: String,
+    email: String,
+    password: String,
+    display_name: String,
+) -> RelayResult<relay_app::sync::UserProfile> {
+    service
+        .sync_register(server_url, email, password, display_name)
+        .await
+}
+
+/// Asks the server for another confirmation e-mail.
+#[tauri::command]
+pub async fn sync_request_verification(
+    service: State<'_, RelayService>,
+    server_url: String,
+    email: String,
+) -> RelayResult<()> {
+    service.sync_request_verification(server_url, email).await
+}
+
+/// Asks the server for a password reset e-mail.
+#[tauri::command]
+pub async fn sync_request_password_reset(
+    service: State<'_, RelayService>,
+    server_url: String,
+    email: String,
+) -> RelayResult<()> {
+    service.sync_request_password_reset(server_url, email).await
+}

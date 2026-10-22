@@ -1065,6 +1065,56 @@ impl RelayService {
     ///
     /// `join` adopts a workspace that already exists on the server rather
     /// than publishing the local one, which is what a second device does.
+    /// Creates an account on a sync server.
+    ///
+    /// Separate from connecting: someone may want an account before they
+    /// have decided which workspace to share, and registration can
+    /// succeed while sign-in is still blocked pending confirmation.
+    pub async fn sync_register(
+        &self,
+        server_url: String,
+        email: String,
+        password: String,
+        display_name: String,
+    ) -> RelayResult<relay_sync::UserProfile> {
+        let client = SyncClient::new(&server_url)?;
+        client.health().await?;
+
+        let display_name = if display_name.trim().is_empty() {
+            email.split('@').next().unwrap_or("User").to_string()
+        } else {
+            display_name
+        };
+
+        client.register(&email, &password, &display_name).await
+    }
+
+    /// Asks a server to send another confirmation e-mail.
+    pub async fn sync_request_verification(
+        &self,
+        server_url: String,
+        email: String,
+    ) -> RelayResult<()> {
+        SyncClient::new(&server_url)?
+            .request_verification(&email)
+            .await
+    }
+
+    /// Asks a server to send a password reset e-mail.
+    pub async fn sync_request_password_reset(
+        &self,
+        server_url: String,
+        email: String,
+    ) -> RelayResult<()> {
+        SyncClient::new(&server_url)?
+            .request_password_reset(&email)
+            .await
+    }
+
+    /// Connects a workspace to a server, signing in and creating it there.
+    ///
+    /// `join` adopts a workspace that already exists on the server rather
+    /// than publishing the local one, which is what a second device does.
     pub async fn sync_connect(
         &self,
         workspace: WorkspaceId,

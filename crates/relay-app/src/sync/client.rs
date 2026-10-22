@@ -98,7 +98,85 @@ impl SyncClient {
             ));
         }
 
+        // The password was right but the address is unconfirmed. Worth
+        // its own message: "not accepted" would send someone hunting for
+        // a typo in a password that is perfectly correct.
+        if response.status() == reqwest::StatusCode::FORBIDDEN {
+            return Err(RelayError::new(
+                ErrorKind::Forbidden,
+                "confirm your e-mail address before signing in",
+            )
+            .with_detail(
+                "The server sent you a link when you registered. Ask for                  another if you cannot find it."
+                    .to_string(),
+            ));
+        }
+
         parse(response).await
+    }
+
+    /// Creates an account on the server.
+    pub async fn register(
+        &self,
+        email: &str,
+        password: &str,
+        display_name: &str,
+    ) -> RelayResult<UserProfile> {
+        let response = self
+            .http
+            .post(format!("{}/v1/auth/register", self.base_url))
+            .json(&serde_json::json!({
+                "email": email,
+                "password": password,
+                "displayName": display_name,
+            }))
+            .send()
+            .await
+            .map_err(transport_error)?;
+
+        match response.status() {
+            reqwest::StatusCode::CONFLICT => Err(RelayError::new(
+                ErrorKind::Conflict,
+                "that e-mail address already has an account on this server",
+            )
+            .with_detail("Sign in instead, or reset the password.")),
+            reqwest::StatusCode::FORBIDDEN => Err(RelayError::new(
+                ErrorKind::Forbidden,
+                "this server is not accepting new accounts",
+            )
+            .with_detail(
+                "Its administrator sets who may register. Ask them for an \
+                 account."
+                    .to_string(),
+            )),
+            _ => parse(response).await,
+        }
+    }
+
+    /// Asks for another confirmation e-mail.
+    ///
+    /// Succeeds whether or not the address is registered: the server
+    /// answers the same either way, on purpose.
+    pub async fn request_verification(&self, email: &str) -> RelayResult<()> {
+        self.post_email("/v1/auth/verify/request", email).await
+    }
+
+    /// Asks for a password reset e-mail. Also deliberately uninformative.
+    pub async fn request_password_reset(&self, email: &str) -> RelayResult<()> {
+        self.post_email("/v1/auth/password/reset", email).await
+    }
+
+    async fn post_email(&self, path: &str, email: &str) -> RelayResult<()> {
+        let response = self
+            .http
+            .post(format!("{}{path}", self.base_url))
+            .json(&serde_json::json!({ "email": email }))
+            .send()
+            .await
+            .map_err(transport_error)?;
+
+        expect_success(response).await?;
+        Ok(())
     }
 
     /// Confirms a token is still valid and returns who it belongs to.

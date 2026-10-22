@@ -154,6 +154,13 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         // Unauthenticated.
         .route("/health", get(routes::health))
+        // The two pages a person sees in a browser, reached from the
+        // links in a verification or reset e-mail.
+        .route("/auth/verify", get(crate::pages::verify))
+        .route(
+            "/auth/reset",
+            get(crate::pages::reset_form).post(crate::pages::reset_submit),
+        )
         .route("/v1/auth/register", post(routes::register))
         .route("/v1/auth/login", post(routes::login))
         // Authenticated.

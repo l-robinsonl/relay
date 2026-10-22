@@ -33,7 +33,7 @@ Phases 1–3 complete. Phase 4 mostly. Phase 5 part-done.
 | TLS | per-request verification toggle, client certificates with host matching, proxies — all reachable from Settings |
 | Packaging | `.deb` / `.rpm` / `.AppImage` build |
 | CI | GitHub Actions: Rust + desktop build on Linux/macOS/Windows, frontend, bindings drift, dependency audit |
-| Accounts | e-mail confirmation and password reset, single-use hashed tokens, Resend or log-only |
+| Accounts | register from the app, e-mail confirmation, password reset, single-use hashed tokens, Resend or log-only |
 
 | Not built | |
 |---|---|
@@ -131,6 +131,12 @@ Run it: `npm run tauri dev`, or the built binary at
   exists because of this: a provider's refusal ("domain not verified")
   is the operator's only clue and contains no schema or query detail.
   Think twice before routing a new failure through `Internal`.
+- **An e-mailed link has to lead somewhere.** The first cut of
+  verification shipped messages pointing at `/auth/verify`, a route that
+  did not exist, because every test posted to the JSON API instead of
+  following the URL the recipient is handed. `server/src/pages.rs`
+  serves the two pages; `http_api.rs` has tests that follow the link out
+  of the message body. Add one whenever a flow sends a URL.
 - **rusqlite pinned to 0.39.** 0.40 needs libsqlite3-sys 0.38; sqlx-sqlite
   needs <0.38; both link native sqlite3. Do not bump without checking.
 

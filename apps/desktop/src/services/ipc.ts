@@ -10,6 +10,7 @@ import type {
   OAuth2Config,
   RelayError,
   RequestDoc,
+  UserProfile,
   TreeNode,
   Workspace,
 } from '@relay/shared-types'
@@ -247,6 +248,16 @@ export const api = {
   // --- application state --------------------------------------------------------
   // --- synchronisation ----------------------------------------------------
   syncProbe: (serverUrl: string) => call<ServerHealth>('sync_probe', { serverUrl }),
+  syncRegister: (
+    serverUrl: string,
+    email: string,
+    password: string,
+    displayName: string,
+  ) => call<UserProfile>('sync_register', { serverUrl, email, password, displayName }),
+  syncRequestVerification: (serverUrl: string, email: string) =>
+    call<void>('sync_request_verification', { serverUrl, email }),
+  syncRequestPasswordReset: (serverUrl: string, email: string) =>
+    call<void>('sync_request_password_reset', { serverUrl, email }),
   syncConnect: (
     workspaceId: string,
     serverUrl: string,
