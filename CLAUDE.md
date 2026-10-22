@@ -36,6 +36,7 @@ Phases 1–3 complete. Phase 4 mostly. Phase 5 part-done.
 | Accounts | register from the app, e-mail confirmation, password reset, single-use hashed tokens, Resend or log-only |
 | Invitations | workspace + role, bound to the invited address, admin-only, revocable; `invite` signup mode now works |
 | Members UI | invite, change a role, remove, withdraw an invitation — all from the Sync dialog |
+| Packaging (server) | Dockerfile + compose, unprivileged, healthcheck; CI builds and smoke-tests the image |
 
 | Not built | |
 |---|---|
@@ -194,6 +195,10 @@ Run it: `npm run tauri dev`, or the built binary at
   is also where the Neon Auth JWKS endpoint is. `RELAY_DATABASE_URL`
   once pointed at the c-8 host with dbname `relay`, a database that
   exists only on c-7, so every Postgres test silently skipped.
+- **`RELAY_TEST_DATABASE_URL` is the scratch database** (`relay_test`)
+  for the conformance suite, which drops the schema every run. Never
+  aim it at `relay`; the suite now refuses a database whose name has no
+  `test` in it, after a run wiped the real one.
 - The verified Resend sending domain is **REDACTED-mail-domain**; use
   something like `relay@REDACTED-mail-domain` for `RELAY_MAIL_FROM`.
   `delivered@resend.dev` is Resend's sink — send test mail there, never

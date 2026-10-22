@@ -110,6 +110,64 @@ jobs:
       - name: Build the desktop application
         run: npm run tauri build -- --no-bundle
 
+  image:
+    name: Server image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: docker/setup-buildx-action@v3
+
+      # Built here rather than only written, because a Dockerfile that
+      # nobody builds rots quietly and is discovered by whoever is
+      # trying to deploy.
+      - name: Build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: relay-server:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Proves the image actually starts and serves, which a build alone
+      # does not: a missing CA bundle or an unwritable data directory
+      # only shows up at runtime.
+      - name: Smoke test
+        run: |
+          set -euo pipefail
+          docker run -d --name relay -p 8787:8787 relay-server:ci
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8787/health > /tmp/health.json; then
+              echo "healthy after ${attempt}s"
+              cat /tmp/health.json
+              break
+            fi
+            if [ "$attempt" = 30 ]; then
+              echo "::error::the container never became healthy"
+              docker logs relay
+              exit 1
+            fi
+            sleep 1
+          done
+
+          # It must run unprivileged: a sync server is reachable from a
+          # network, and root in the container is one bug from root on
+          # the host.
+          whoami_in_container="$(docker exec relay whoami)"
+          echo "running as: ${whoami_in_container}"
+          [ "${whoami_in_container}" = "relay" ] || {
+            echo "::error::the image runs as ${whoami_in_container}, not relay"
+            exit 1
+          }
+
+          # And SIGTERM must stop it promptly, or every deploy waits out
+          # the orchestrator's kill timeout.
+          start=$(date +%s)
+          docker stop --timeout 15 relay > /dev/null
+          echo "stopped in $(( $(date +%s) - start ))s"
+          docker logs relay 2>&1 | tail -5
+
   audit:
     name: Dependency audit
     runs-on: ubuntu-latest

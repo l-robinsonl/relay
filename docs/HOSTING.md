@@ -295,3 +295,65 @@ gets `viewer`, the least privileged.
   workspace, which role and which address, and sends you to Relay. A
   page that asked for a password would be indistinguishable from a
   phishing page sent to the same address, and it says so.
+
+## Running it
+
+### Docker Compose
+
+```sh
+cp .env.example .env     # edit it: at minimum RELAY_PUBLIC_URL
+docker compose up -d
+```
+
+SQLite in a named volume, which is a perfectly good answer for a team:
+one file, one backup, no second process. Add PostgreSQL when you want
+replication or a managed database:
+
+```sh
+docker compose --profile postgres up -d
+```
+
+### The image on its own
+
+```sh
+docker build -t relay-server .
+docker run -d --name relay \
+  -p 8787:8787 -v relay-data:/data \
+  -e RELAY_PUBLIC_URL=https://sync.example.com \
+  -e RELAY_ADMIN_EMAIL=you@example.com \
+  -e RELAY_ADMIN_PASSWORD='a long passphrase' \
+  relay-server
+```
+
+It runs as an unprivileged user, carries only the binary and a CA
+bundle, handles `SIGTERM` by finishing in-flight requests, and applies
+its migrations on start. CI builds it and checks all of that on every
+push, so it cannot rot unnoticed.
+
+### Behind a reverse proxy
+
+Terminate TLS in front of it and forward to port 8787. The server needs
+no certificate of its own. Two things to get right:
+
+- **`RELAY_PUBLIC_URL` must be the address people actually reach**, not
+  the container's. It is what goes into every e-mailed link, and a
+  wrong value is invisible until somebody cannot click an invitation.
+  The server warns at startup if it still points at localhost.
+- **Allow WebSocket upgrades** on `/v1/workspaces/{id}/ws`, or live
+  updates fall back to nothing and changes only arrive on the next
+  manual sync.
+
+### First account
+
+`RELAY_SIGNUP_MODE=invite` means nobody can register unannounced, which
+leaves a chicken-and-egg problem for the first account.
+`RELAY_ADMIN_EMAIL` and `RELAY_ADMIN_PASSWORD` solve it: they create one
+administrator on a server that has no users yet, and are ignored
+afterwards. Clear them once it exists.
+
+### A note on the test suite
+
+The conformance suite **drops and recreates the `relay` schema** on
+whatever `RELAY_TEST_POSTGRES_URL` points at. It refuses to run unless
+the database name contains `test`, but give it a scratch database of
+its own regardless.

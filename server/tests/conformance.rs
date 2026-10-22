@@ -33,6 +33,25 @@ async fn postgres_store() -> Option<Arc<dyn SyncStore>> {
         return None;
     }
 
+    // This suite drops and recreates the `relay` schema. Pointed at a
+    // database holding real data it would destroy it, and the variable
+    // being named TEST is not much of a guard when a connection string
+    // is copied from somewhere else. Insist the database name says so.
+    let database = url
+        .rsplit('/')
+        .next()
+        .unwrap_or_default()
+        .split('?')
+        .next()
+        .unwrap_or_default();
+    assert!(
+        database.contains("test"),
+        "RELAY_TEST_POSTGRES_URL points at a database called '{database}'. \
+         These tests DROP the relay schema, so the name has to contain \
+         'test' — create a scratch database rather than aiming this at a \
+         real one."
+    );
+
     let store = PostgresStore::connect(&url).await.unwrap_or_else(|e| {
         panic!(
             "RELAY_TEST_POSTGRES_URL is set but unusable, so these tests would \

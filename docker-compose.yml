@@ -1,0 +1,64 @@
+# Self-hosting Relay's sync server.
+#
+#   cp .env.example .env   # then edit it
+#   docker compose up -d
+#
+# That gives you SQLite in a named volume, which is a perfectly good
+# answer for a team: one file, one backup, no second process. Add
+# PostgreSQL with `--profile postgres` when you want replication or a
+# managed database.
+
+services:
+  relay:
+    build: .
+    image: relay-server:local
+    restart: unless-stopped
+    ports:
+      - "${RELAY_PORT:-8787}:8787"
+    environment:
+      # Everything the server reads is documented in .env.example.
+      RELAY_BIND: 0.0.0.0:8787
+      RELAY_DATABASE_URL: ${RELAY_DATABASE_URL:-sqlite:///data/relay.db}
+      # Must be the address people actually reach, because it is what
+      # goes into every e-mailed link. Leave it wrong and the links in
+      # your invitations point at the inside of a container.
+      RELAY_PUBLIC_URL: ${RELAY_PUBLIC_URL:-http://localhost:8787}
+      RELAY_SIGNUP_MODE: ${RELAY_SIGNUP_MODE:-invite}
+      RELAY_SESSION_DAYS: ${RELAY_SESSION_DAYS:-30}
+      RELAY_LOG: ${RELAY_LOG:-info,sqlx=warn}
+      # Consumed on first start only; clear them afterwards.
+      RELAY_ADMIN_EMAIL: ${RELAY_ADMIN_EMAIL:-}
+      RELAY_ADMIN_PASSWORD: ${RELAY_ADMIN_PASSWORD:-}
+      # Without these, links are written to the log instead of sent.
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      RELAY_MAIL_FROM: ${RELAY_MAIL_FROM:-}
+      RELAY_REQUIRE_VERIFIED_EMAIL: ${RELAY_REQUIRE_VERIFIED_EMAIL:-false}
+    volumes:
+      - relay-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8787/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # Only started with `--profile postgres`.
+  postgres:
+    profiles: ["postgres"]
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-relay}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-relay}
+    volumes:
+      - relay-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-relay}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  relay-data:
+  relay-postgres:

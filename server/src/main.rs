@@ -63,6 +63,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
 
+    warn_about_the_configuration(&state);
+
     let listener = tokio::net::TcpListener::bind(bind).await?;
     let actual = listener.local_addr()?;
     tracing::info!(%actual, signup = %signup, "relay-server listening");
@@ -73,6 +75,53 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     tracing::info!("relay-server stopped");
     Ok(())
+}
+
+/// Says so at startup when the configuration will not do what it looks
+/// like it does.
+///
+/// Each of these is survivable, so none of them refuses to start — a
+/// sync server that will not come up is worse than one with an awkward
+/// setting. They are logged at startup because that is the one moment
+/// somebody is looking.
+fn warn_about_the_configuration(state: &AppState) {
+    let config = &state.config;
+
+    if config.require_verified_email && !state.mailer.delivers() {
+        tracing::warn!(
+            "RELAY_REQUIRE_VERIFIED_EMAIL is on but no mail provider is \
+             configured, so confirmation links are only written to this log. \
+             Nobody but the bootstrap administrator will be able to sign in \
+             until you set RESEND_API_KEY and RELAY_MAIL_FROM, or retrieve \
+             each link from here by hand."
+        );
+    }
+
+    // Every e-mailed link is built from this. A wrong value is invisible
+    // until somebody cannot click an invitation.
+    let public = config.public_url.trim_end_matches('/');
+    if public.contains("0.0.0.0") || public.contains("127.0.0.1") || public.contains("localhost") {
+        tracing::warn!(
+            %public,
+            "RELAY_PUBLIC_URL points at this machine, so e-mailed links will \
+             not work for anybody else. Set it to the address people reach \
+             this server on."
+        );
+    } else if public.starts_with("http://") {
+        tracing::warn!(
+            %public,
+            "RELAY_PUBLIC_URL is http, so session tokens and invitation \
+             links cross the network in the clear. Put this behind TLS."
+        );
+    }
+
+    if config.signup_mode == relay_server::config::SignupMode::Open && !state.mailer.delivers() {
+        tracing::warn!(
+            "RELAY_SIGNUP_MODE is open and addresses are not confirmed, so \
+             anyone who can reach this server can create an account. Use \
+             `invite` unless that is what you want."
+        );
+    }
 }
 
 /// Resolves when the process is asked to stop.

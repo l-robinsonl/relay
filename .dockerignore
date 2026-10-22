@@ -1,0 +1,21 @@
+# Build artefacts and dependencies are rebuilt inside the image; copying
+# them in would send gigabytes to the daemon and poison the cache.
+target/
+**/target/
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+
+# Never into an image.
+.env
+.env.*
+!.env.example
+
+.git/
+.github/
+apps/
+packages/
+docs/
+scripts/
+*.md
