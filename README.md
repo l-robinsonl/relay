@@ -1,5 +1,8 @@
 # Relay
 
+[![CI](https://github.com/l-robinsonl/relay/actions/workflows/ci.yml/badge.svg)](https://github.com/l-robinsonl/relay/actions/workflows/ci.yml)
+[![Licence: MIT OR Apache-2.0](https://img.shields.io/badge/licence-MIT%20OR%20Apache--2.0-blue)](#licence)
+
 A local-first API client. It starts instantly, works entirely offline, and
 never asks you to create an account.
 
@@ -8,12 +11,13 @@ machine. If a team wants to share them, they can run one small server
 themselves — or pay us a small amount to run it for them. Nothing about the
 desktop application changes either way.
 
-> **Status: Phases 1–3 complete.** The HTTP engine, local persistence,
-> variable resolution, import/export, the desktop interface, the
-> self-hosted sync server and the client that talks to it are built and
-> tested — against SQLite and against PostgreSQL. The hosted service and
-> billing are designed but not yet implemented. See
-> [the roadmap](#roadmap) for exactly what works today.
+> **Status: Phases 1–4 complete.** The HTTP engine, local persistence,
+> variable resolution, import/export, the desktop interface, OAuth 2.0,
+> scripting, the self-hosted sync server and the client that talks to it
+> are built and tested — against SQLite and against PostgreSQL, on Linux,
+> macOS and Windows. The hosted service and billing are designed but not
+> yet implemented. See [the roadmap](#roadmap) for exactly what works
+> today.
 
 ## Why
 
