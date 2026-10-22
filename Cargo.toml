@@ -15,7 +15,10 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.88"
+# The real floor, not an aspiration: sqlx 0.9 refuses to build below
+# this, which the container build found by pinning an older toolchain
+# and failing. `time` and `plist` need 1.88 of their own.
+rust-version = "1.94"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/l-robinsonl/relay"
 authors = ["Relay contributors"]

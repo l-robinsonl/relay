@@ -6,7 +6,9 @@
 # image is only the server a team self-hosts.
 
 # --- build ------------------------------------------------------------------
-FROM rust:1.90-bookworm AS builder
+# Pinned, so an image built today and one built next year are the same
+# image. sqlx 0.9 needs 1.94 at the least; see rust-version in Cargo.toml.
+FROM rust:1.99.1-bookworm AS builder
 
 WORKDIR /build
 
