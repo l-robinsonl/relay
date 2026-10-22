@@ -12,7 +12,8 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::Response;
 use relay_models::Timestamp;
 use relay_sync::{
-    ApplyResult, ChangePage, LoginRequest, LoginResponse, MutationBatch, Role, UserProfile,
+    ApplyResult, ChangePage, LoginRequest, LoginResponse, Membership, MutationBatch, Role,
+    UserProfile,
 };
 use serde::{Deserialize, Serialize};
 
@@ -38,6 +39,9 @@ pub struct RegisterRequest {
     /// Shown to teammates; defaults to the local part of the address.
     #[serde(default)]
     pub display_name: String,
+    /// A token from an invitation e-mail, when registering through one.
+    #[serde(default)]
+    pub invitation: Option<String>,
 }
 
 /// `POST /v1/auth/register`
@@ -51,8 +55,14 @@ pub async fn register(
         body.display_name.clone()
     };
 
-    let profile =
-        crate::app::register_user(&state, &body.email, &body.password, &display_name).await?;
+    let profile = crate::app::register_user(
+        &state,
+        &body.email,
+        &body.password,
+        &display_name,
+        body.invitation.as_deref(),
+    )
+    .await?;
     Ok(Json(profile))
 }
 
@@ -161,6 +171,140 @@ pub async fn confirm_password_reset(
 ) -> ServerResult<StatusCode> {
     crate::app::confirm_password_reset(&state, &body.token, &body.password).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// An invitation as the API reports it.
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InvitationView {
+    /// Its id, for revoking.
+    pub id: String,
+    /// Who it was sent to.
+    pub email: String,
+    /// What it grants.
+    pub role: Role,
+    /// When it was sent.
+    pub created_at: Timestamp,
+    /// When it lapses.
+    pub expires_at: Timestamp,
+}
+
+impl From<crate::store::Invitation> for InvitationView {
+    fn from(invitation: crate::store::Invitation) -> Self {
+        Self {
+            id: invitation.id,
+            email: invitation.email,
+            role: invitation.role,
+            created_at: Timestamp(invitation.created_at),
+            expires_at: Timestamp(invitation.expires_at),
+        }
+    }
+}
+
+/// What to invite, and as what.
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InviteRequest {
+    /// The address to invite.
+    pub email: String,
+    /// The role to grant. Defaults to the least privileged.
+    #[serde(default)]
+    pub role: Option<Role>,
+}
+
+/// `POST /v1/workspaces/{id}/invitations`
+pub async fn create_invitation(
+    State(state): State<AppState>,
+    Path(workspace_id): Path<String>,
+    user: AuthenticatedUser,
+    Json(body): Json<InviteRequest>,
+) -> ServerResult<Json<InvitationView>> {
+    let invitation = crate::app::invite_to_workspace(
+        &state,
+        &user.actor(),
+        &workspace_id,
+        &body.email,
+        // A caller who names no role gets the least privileged one.
+        body.role.unwrap_or(Role::Viewer),
+    )
+    .await?;
+
+    Ok(Json(invitation.into()))
+}
+
+/// `GET /v1/workspaces/{id}/invitations`
+pub async fn list_invitations(
+    State(state): State<AppState>,
+    Path(workspace_id): Path<String>,
+    user: AuthenticatedUser,
+) -> ServerResult<Json<Vec<InvitationView>>> {
+    let invitations = state
+        .store
+        .list_invitations(&user.actor(), &workspace_id)
+        .await?;
+
+    Ok(Json(invitations.into_iter().map(Into::into).collect()))
+}
+
+/// `DELETE /v1/workspaces/{id}/invitations/{invitation_id}`
+pub async fn revoke_invitation(
+    State(state): State<AppState>,
+    Path((workspace_id, invitation_id)): Path<(String, String)>,
+    user: AuthenticatedUser,
+) -> ServerResult<StatusCode> {
+    state
+        .store
+        .revoke_invitation(&user.actor(), &workspace_id, &invitation_id)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// What the holder of a token is shown before accepting.
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OfferView {
+    /// Which workspace.
+    pub workspace_id: String,
+    /// Its name, so the page can say what is on offer.
+    pub workspace_name: String,
+    /// The address it was sent to.
+    pub email: String,
+    /// The role it grants.
+    pub role: Role,
+}
+
+/// `GET /v1/invitations/{token}`
+///
+/// Unauthenticated on purpose: the recipient may not have an account
+/// yet, and holding the token is what entitles them to read this.
+pub async fn invitation_offer(
+    State(state): State<AppState>,
+    Path(token): Path<String>,
+) -> ServerResult<Json<OfferView>> {
+    let offer = state
+        .store
+        .invitation_offer(&auth::hash_token(&token), Timestamp::now().as_millis())
+        .await?
+        .ok_or_else(|| {
+            ServerError::BadRequest("that invitation has expired or has already been used".into())
+        })?;
+
+    Ok(Json(OfferView {
+        workspace_id: offer.workspace_id,
+        workspace_name: offer.workspace_name,
+        email: offer.email,
+        role: offer.role,
+    }))
+}
+
+/// `POST /v1/invitations/{token}/accept`
+pub async fn accept_invitation(
+    State(state): State<AppState>,
+    Path(token): Path<String>,
+    user: AuthenticatedUser,
+) -> ServerResult<Json<Membership>> {
+    let membership = crate::app::accept_invitation(&state, &user.0, &token).await?;
+    Ok(Json(membership))
 }
 
 // --- workspaces ------------------------------------------------------------

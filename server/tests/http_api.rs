@@ -19,6 +19,8 @@ struct TestServer {
     handle: tokio::task::JoinHandle<()>,
     /// What the server tried to e-mail.
     mail: Arc<relay_server::mail::CapturingMailer>,
+    /// The backing store, for seeding past a closed registration.
+    store: Arc<dyn SyncStore>,
 }
 
 impl Drop for TestServer {
@@ -163,7 +165,8 @@ async fn start_requiring_verification() -> TestServer {
 
 async fn start_with(store: SqliteStore, config: Config) -> TestServer {
     let mail = Arc::new(relay_server::mail::CapturingMailer::new());
-    let state = AppState::with_mailer(Arc::new(store), config, mail.clone());
+    let store: Arc<dyn SyncStore> = Arc::new(store);
+    let state = AppState::with_mailer(store.clone(), config, mail.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
 
@@ -176,6 +179,7 @@ async fn start_with(store: SqliteStore, config: Config) -> TestServer {
         client: reqwest::Client::new(),
         handle,
         mail,
+        store,
     }
 }
 
@@ -1143,7 +1147,7 @@ async fn repeated_requests_within_the_cooldown_send_one_message() {
 /// The whole link out of a message body, not just its token.
 fn link_in(body: &str) -> String {
     body.split_whitespace()
-        .find(|word| word.contains("/auth/"))
+        .find(|word| word.starts_with("http") && word.contains("token="))
         .unwrap_or_else(|| panic!("no link in the message:\n{body}"))
         .to_string()
 }
@@ -1333,4 +1337,344 @@ async fn a_crafted_token_cannot_inject_markup_into_the_page() {
 
     assert!(!html.contains("<script>"), "{html}");
     assert!(html.contains("&lt;script&gt;"));
+}
+
+// --- invitations over HTTP -------------------------------------------------
+
+/// A server where registration needs an invitation.
+async fn start_invite_only() -> TestServer {
+    let store = SqliteStore::connect("sqlite::memory:").await.unwrap();
+    store.migrate().await.unwrap();
+
+    let config = Config {
+        database_url: "sqlite::memory:".into(),
+        bind: "127.0.0.1:0".parse().unwrap(),
+        public_url: "https://relay.test".into(),
+        signup_mode: SignupMode::Invite,
+        session_ttl: std::time::Duration::from_secs(3600),
+        admin_email: None,
+        admin_password: None,
+        max_body_bytes: relay_sync::MAX_BATCH_BYTES + 65536,
+        resend_api_key: None,
+        mail_from: None,
+        require_verified_email: false,
+    };
+
+    start_with(store, config).await
+}
+
+/// The first account on an invite-only server, with a workspace.
+///
+/// Created straight in the store: registration is shut to everyone
+/// without a link, which is the situation a real operator bootstraps
+/// out of with `RELAY_ADMIN_EMAIL`.
+async fn owner_with_workspace_invite_only(server: &TestServer) -> String {
+    let hash = relay_server::auth::hash_password("correct horse battery").unwrap();
+    server
+        .store
+        .create_user(relay_server::store::NewUser {
+            email: "ada@example.com".into(),
+            password_hash: hash,
+            display_name: "Ada".into(),
+            is_server_admin: false,
+        })
+        .await
+        .unwrap();
+
+    let token = server
+        .post(
+            "/v1/auth/login",
+            json!({ "email": "ada@example.com", "password": "correct horse battery" }),
+        )
+        .await
+        .json::<Value>()
+        .await
+        .unwrap()["token"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    server
+        .post_auth(
+            "/v1/workspaces",
+            &token,
+            json!({ "id": "w1", "name": "Team" }),
+        )
+        .await;
+
+    token
+}
+
+/// Creates a workspace owned by a freshly registered user.
+async fn owner_with_workspace(server: &TestServer) -> String {
+    let token = server.sign_up("ada@example.com").await;
+    let response = server
+        .post_auth(
+            "/v1/workspaces",
+            &token,
+            json!({ "id": "w1", "name": "Team" }),
+        )
+        .await;
+    assert!(response.status().is_success());
+    token
+}
+
+#[tokio::test]
+async fn an_admin_can_invite_and_the_invitee_gets_a_link() {
+    let server = start(SignupMode::Open).await;
+    let token = owner_with_workspace(&server).await;
+    server.mail.clear();
+
+    let response = server
+        .post_auth(
+            "/v1/workspaces/w1/invitations",
+            &token,
+            json!({ "email": "grace@example.com", "role": "editor" }),
+        )
+        .await;
+    assert_eq!(response.status(), 200);
+
+    let sent = server.mail.last().expect("an invitation e-mail");
+    assert_eq!(sent.to, "grace@example.com");
+    assert!(sent.body.contains("/invite?token="), "{}", sent.body);
+    assert!(sent.body.contains("editor"), "{}", sent.body);
+}
+
+#[tokio::test]
+async fn the_invitation_link_says_what_is_on_offer() {
+    let server = start(SignupMode::Open).await;
+    let token = owner_with_workspace(&server).await;
+    server.mail.clear();
+    server
+        .post_auth(
+            "/v1/workspaces/w1/invitations",
+            &token,
+            json!({ "email": "grace@example.com", "role": "editor" }),
+        )
+        .await;
+
+    let path = link_in(&server.mail.last().unwrap().body)
+        .strip_prefix("https://relay.test")
+        .unwrap()
+        .to_string();
+
+    let html = server.get(&path).await.text().await.unwrap();
+    assert!(html.contains("Team"), "{html}");
+    assert!(html.contains("editor"));
+    assert!(html.contains("grace@example.com"));
+    // It must not ask for a password: that is what a phishing page
+    // sent to the same address would do.
+    assert!(!html.contains("type=\"password\""), "{html}");
+}
+
+#[tokio::test]
+async fn an_invited_person_can_register_and_lands_in_the_workspace() {
+    let server = start_invite_only().await;
+
+    // Registration is closed without one.
+    assert_eq!(
+        server
+            .post(
+                "/v1/auth/register",
+                json!({ "email": "nobody@example.com", "password": "correct horse battery" }),
+            )
+            .await
+            .status(),
+        404
+    );
+
+    // The first account still has to exist; make it directly in the store.
+    let token = owner_with_workspace_invite_only(&server).await;
+    server.mail.clear();
+    server
+        .post_auth(
+            "/v1/workspaces/w1/invitations",
+            &token,
+            json!({ "email": "grace@example.com", "role": "editor" }),
+        )
+        .await;
+    let invitation = token_in(&server.mail.last().unwrap().body);
+
+    let response = server
+        .post(
+            "/v1/auth/register",
+            json!({
+                "email": "grace@example.com",
+                "password": "correct horse battery",
+                "invitation": invitation,
+            }),
+        )
+        .await;
+    assert_eq!(response.status(), 200, "{}", response.text().await.unwrap());
+
+    // And they are in the workspace, as an editor.
+    let guest = server
+        .post(
+            "/v1/auth/login",
+            json!({ "email": "grace@example.com", "password": "correct horse battery" }),
+        )
+        .await
+        .json::<Value>()
+        .await
+        .unwrap()["token"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let workspaces: Value = server
+        .get_auth("/v1/workspaces", &guest)
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(workspaces[0]["id"], "w1");
+}
+
+#[tokio::test]
+async fn an_invitation_cannot_be_used_to_register_a_different_address() {
+    let server = start_invite_only().await;
+    let token = owner_with_workspace_invite_only(&server).await;
+    server.mail.clear();
+    server
+        .post_auth(
+            "/v1/workspaces/w1/invitations",
+            &token,
+            json!({ "email": "grace@example.com", "role": "admin" }),
+        )
+        .await;
+    let invitation = token_in(&server.mail.last().unwrap().body);
+
+    let response = server
+        .post(
+            "/v1/auth/register",
+            json!({
+                "email": "mallory@example.com",
+                "password": "correct horse battery",
+                "invitation": invitation,
+            }),
+        )
+        .await;
+
+    assert_eq!(response.status(), 400);
+    let body = response.text().await.unwrap();
+    assert!(body.contains("grace@example.com"), "{body}");
+}
+
+#[tokio::test]
+async fn an_editor_cannot_invite_an_administrator() {
+    let server = start(SignupMode::Open).await;
+    let owner = owner_with_workspace(&server).await;
+    let guest_token = server.sign_up("grace@example.com").await;
+
+    let guest_id: String = server
+        .get_auth("/v1/auth/me", &guest_token)
+        .await
+        .json::<Value>()
+        .await
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    server
+        .client
+        .put(server.url(&format!("/v1/workspaces/w1/members/{guest_id}")))
+        .bearer_auth(&owner)
+        .json(&json!({ "role": "editor" }))
+        .send()
+        .await
+        .unwrap();
+
+    let response = server
+        .post_auth(
+            "/v1/workspaces/w1/invitations",
+            &guest_token,
+            json!({ "email": "mallory@example.com", "role": "admin" }),
+        )
+        .await;
+
+    assert_eq!(response.status(), 404, "an editor widened the membership");
+}
+
+#[tokio::test]
+async fn an_invitation_defaults_to_the_least_privileged_role() {
+    let server = start(SignupMode::Open).await;
+    let token = owner_with_workspace(&server).await;
+
+    let invitation: Value = server
+        .post_auth(
+            "/v1/workspaces/w1/invitations",
+            &token,
+            json!({ "email": "grace@example.com" }),
+        )
+        .await
+        .json()
+        .await
+        .unwrap();
+
+    assert_eq!(invitation["role"], "viewer");
+}
+
+#[tokio::test]
+async fn pending_invitations_can_be_listed_and_revoked() {
+    let server = start(SignupMode::Open).await;
+    let token = owner_with_workspace(&server).await;
+
+    let created: Value = server
+        .post_auth(
+            "/v1/workspaces/w1/invitations",
+            &token,
+            json!({ "email": "grace@example.com", "role": "viewer" }),
+        )
+        .await
+        .json()
+        .await
+        .unwrap();
+
+    let listed: Value = server
+        .get_auth("/v1/workspaces/w1/invitations", &token)
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(listed.as_array().unwrap().len(), 1);
+
+    let id = created["id"].as_str().unwrap();
+    let response = server
+        .client
+        .delete(server.url(&format!("/v1/workspaces/w1/invitations/{id}")))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 204);
+
+    let after: Value = server
+        .get_auth("/v1/workspaces/w1/invitations", &token)
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert!(after.as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_non_member_cannot_list_who_has_been_invited() {
+    // The pending list is a list of colleagues' e-mail addresses.
+    let server = start(SignupMode::Open).await;
+    let owner = owner_with_workspace(&server).await;
+    server
+        .post_auth(
+            "/v1/workspaces/w1/invitations",
+            &owner,
+            json!({ "email": "grace@example.com" }),
+        )
+        .await;
+
+    let outsider = server.sign_up("mallory@example.com").await;
+    let response = server
+        .get_auth("/v1/workspaces/w1/invitations", &outsider)
+        .await;
+
+    assert_eq!(response.status(), 404);
 }

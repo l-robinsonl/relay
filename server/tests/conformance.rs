@@ -981,3 +981,268 @@ async fn deleting_a_user_takes_their_tokens_with_them() {
         None
     );
 }
+
+// --- invitations -----------------------------------------------------------
+
+use relay_server::store::InvitationOffer;
+
+async fn invited_workspace(store: &Arc<dyn SyncStore>) -> (Actor, Actor) {
+    let owner = seed_user(store, "ada@example.com").await;
+    store.create_workspace(&owner, "w1", "Team").await.unwrap();
+    let guest = seed_user(store, "grace@example.com").await;
+    (owner, guest)
+}
+
+async fn invite(store: &Arc<dyn SyncStore>, owner: &Actor, email: &str, role: Role, hash: &str) {
+    store
+        .create_invitation(owner, "w1", email, role, hash, in_an_hour())
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn an_invitation_lets_someone_join_with_the_role_it_names() {
+    for_each_backend(|store| async move {
+        let (owner, guest) = invited_workspace(&store).await;
+        invite(&store, &owner, "grace@example.com", Role::Editor, "inv-1").await;
+
+        let now = relay_models::Timestamp::now().as_millis();
+        let membership = store
+            .accept_invitation(&guest.user_id, "grace@example.com", "inv-1", now)
+            .await
+            .unwrap();
+
+        assert_eq!(membership.role, Role::Editor);
+        assert_eq!(
+            store
+                .membership("w1", &guest.user_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .role,
+            Role::Editor
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_forwarded_invitation_does_not_admit_the_wrong_person() {
+    // The token is in an e-mail, and e-mails get forwarded. Binding the
+    // invitation to the address it was sent to is what stops a
+    // forwarded message becoming access to someone else's workspace.
+    for_each_backend(|store| async move {
+        let (owner, _) = invited_workspace(&store).await;
+        let bystander = seed_user(&store, "mallory@example.com").await;
+        invite(&store, &owner, "grace@example.com", Role::Admin, "inv-2").await;
+
+        let now = relay_models::Timestamp::now().as_millis();
+        let error = store
+            .accept_invitation(&bystander.user_id, "mallory@example.com", "inv-2", now)
+            .await
+            .unwrap_err();
+
+        assert!(error.to_string().contains("grace@example.com"), "{error}");
+        assert!(
+            store
+                .membership("w1", &bystander.user_id)
+                .await
+                .unwrap()
+                .is_none()
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn an_invitation_is_accepted_once() {
+    for_each_backend(|store| async move {
+        let (owner, guest) = invited_workspace(&store).await;
+        invite(&store, &owner, "grace@example.com", Role::Viewer, "inv-3").await;
+
+        let now = relay_models::Timestamp::now().as_millis();
+        store
+            .accept_invitation(&guest.user_id, "grace@example.com", "inv-3", now)
+            .await
+            .unwrap();
+
+        let second = store
+            .accept_invitation(&guest.user_id, "grace@example.com", "inv-3", now)
+            .await;
+        assert!(second.is_err(), "the same invitation was accepted twice");
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn only_an_administrator_may_invite() {
+    for_each_backend(|store| async move {
+        let (owner, guest) = invited_workspace(&store).await;
+        store
+            .upsert_membership(&owner, "w1", &guest.user_id, Role::Editor)
+            .await
+            .unwrap();
+
+        // An editor can write content but must not be able to widen who
+        // else can.
+        let error = store
+            .create_invitation(
+                &guest,
+                "w1",
+                "mallory@example.com",
+                Role::Admin,
+                "inv-4",
+                in_an_hour(),
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(error, ServerError::Forbidden), "{error:?}");
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_stranger_cannot_invite_themselves_in() {
+    for_each_backend(|store| async move {
+        let (_, outsider) = invited_workspace(&store).await;
+
+        let error = store
+            .create_invitation(
+                &outsider,
+                "w1",
+                "grace@example.com",
+                Role::Admin,
+                "inv-5",
+                in_an_hour(),
+            )
+            .await
+            .unwrap_err();
+
+        // 404-shaped, not 403: confirming the workspace exists would let
+        // ids be enumerated.
+        assert!(matches!(error, ServerError::Forbidden), "{error:?}");
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn an_expired_invitation_offers_nothing() {
+    for_each_backend(|store| async move {
+        let (owner, _) = invited_workspace(&store).await;
+        let now = relay_models::Timestamp::now().as_millis();
+
+        store
+            .create_invitation(
+                &owner,
+                "w1",
+                "grace@example.com",
+                Role::Viewer,
+                "old",
+                now - 1,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(store.invitation_offer("old", now).await.unwrap(), None);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn the_offer_says_what_is_being_given_away() {
+    for_each_backend(|store| async move {
+        let (owner, _) = invited_workspace(&store).await;
+        invite(&store, &owner, "grace@example.com", Role::Editor, "inv-6").await;
+
+        let offer = store
+            .invitation_offer("inv-6", relay_models::Timestamp::now().as_millis())
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(
+            offer,
+            InvitationOffer {
+                workspace_id: "w1".into(),
+                workspace_name: "Team".into(),
+                email: "grace@example.com".into(),
+                role: Role::Editor,
+            }
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn accepting_removes_it_from_the_pending_list() {
+    for_each_backend(|store| async move {
+        let (owner, guest) = invited_workspace(&store).await;
+        invite(&store, &owner, "grace@example.com", Role::Viewer, "inv-7").await;
+
+        assert_eq!(store.list_invitations(&owner, "w1").await.unwrap().len(), 1);
+
+        store
+            .accept_invitation(
+                &guest.user_id,
+                "grace@example.com",
+                "inv-7",
+                relay_models::Timestamp::now().as_millis(),
+            )
+            .await
+            .unwrap();
+
+        assert!(
+            store
+                .list_invitations(&owner, "w1")
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_revoked_invitation_stops_working() {
+    for_each_backend(|store| async move {
+        let (owner, guest) = invited_workspace(&store).await;
+        invite(&store, &owner, "grace@example.com", Role::Admin, "inv-8").await;
+
+        let listed = store.list_invitations(&owner, "w1").await.unwrap();
+        store
+            .revoke_invitation(&owner, "w1", &listed[0].id)
+            .await
+            .unwrap();
+
+        let now = relay_models::Timestamp::now().as_millis();
+        assert_eq!(store.invitation_offer("inv-8", now).await.unwrap(), None);
+        assert!(
+            store
+                .accept_invitation(&guest.user_id, "grace@example.com", "inv-8", now)
+                .await
+                .is_err()
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn an_admin_of_one_workspace_cannot_revoke_anothers() {
+    for_each_backend(|store| async move {
+        let (owner, other) = invited_workspace(&store).await;
+        store
+            .create_workspace(&other, "w2", "Theirs")
+            .await
+            .unwrap();
+
+        invite(&store, &owner, "grace@example.com", Role::Viewer, "inv-9").await;
+        let listed = store.list_invitations(&owner, "w1").await.unwrap();
+
+        // Guessing an id must not be enough; the workspace is checked too.
+        let error = store.revoke_invitation(&other, "w2", &listed[0].id).await;
+        assert!(error.is_ok(), "deleting nothing is not an error");
+
+        assert_eq!(store.list_invitations(&owner, "w1").await.unwrap().len(), 1);
+    })
+    .await;
+}

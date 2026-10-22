@@ -157,6 +157,7 @@ pub fn router(state: AppState) -> Router {
         // The two pages a person sees in a browser, reached from the
         // links in a verification or reset e-mail.
         .route("/auth/verify", get(crate::pages::verify))
+        .route("/invite", get(crate::pages::invite))
         .route(
             "/auth/reset",
             get(crate::pages::reset_form).post(crate::pages::reset_submit),
@@ -194,6 +195,19 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/workspaces/{id}/export", get(routes::export))
         .route("/v1/workspaces/{id}/members", get(routes::list_members))
         .route(
+            "/v1/workspaces/{id}/invitations",
+            get(routes::list_invitations).post(routes::create_invitation),
+        )
+        .route(
+            "/v1/workspaces/{id}/invitations/{invitation_id}",
+            delete(routes::revoke_invitation),
+        )
+        .route("/v1/invitations/{token}", get(routes::invitation_offer))
+        .route(
+            "/v1/invitations/{token}/accept",
+            post(routes::accept_invitation),
+        )
+        .route(
             "/v1/workspaces/{id}/members/{user_id}",
             put(routes::put_member),
         )
@@ -213,17 +227,46 @@ pub async fn register_user(
     email: &str,
     password: &str,
     display_name: &str,
+    invitation: Option<&str>,
 ) -> ServerResult<UserProfile> {
+    // Checked before anything is created: an invitation decides both
+    // whether registration is allowed under `invite` mode and which
+    // address the account must use.
+    let offer = match invitation {
+        None => None,
+        Some(token) => Some(
+            state
+                .store
+                .invitation_offer(&auth::hash_token(token), Timestamp::now().as_millis())
+                .await?
+                .ok_or_else(|| {
+                    ServerError::BadRequest(
+                        "that invitation has expired or has already been used".into(),
+                    )
+                })?,
+        ),
+    };
+
     match state.config.signup_mode {
         SignupMode::Open => {}
-        SignupMode::Off => {
-            return Err(ServerError::Forbidden);
-        }
+        SignupMode::Off => return Err(ServerError::Forbidden),
         SignupMode::Invite => {
-            // Invitations are not issued yet, so invite-only means closed
-            // rather than silently open. Failing shut is the safe default.
-            return Err(ServerError::Forbidden);
+            if offer.is_none() {
+                return Err(ServerError::Forbidden);
+            }
         }
+    }
+
+    // The account must use the address the invitation was sent to, or an
+    // invitation to one person is a registration ticket for whoever it
+    // gets forwarded to.
+    if let Some(offer) = &offer
+        && !offer.email.eq_ignore_ascii_case(email.trim())
+    {
+        return Err(ServerError::BadRequest(format!(
+            "that invitation was sent to {}; register with that address",
+            offer.email
+        )));
     }
 
     let email = auth::validate_email(email)?;
@@ -238,6 +281,21 @@ pub async fn register_user(
             is_server_admin: false,
         })
         .await?;
+
+    // Joining is what the invitation was for, so a failure here is not
+    // something to shrug off: the account would exist but sit outside
+    // the workspace, with the token already spent.
+    if let Some(token) = invitation {
+        state
+            .store
+            .accept_invitation(
+                &profile.id,
+                &profile.email,
+                &auth::hash_token(token),
+                Timestamp::now().as_millis(),
+            )
+            .await?;
+    }
 
     // Best effort: the account exists either way, and a user who never
     // receives the mail can ask for another.
@@ -498,4 +556,70 @@ pub async fn confirm_password_reset(
     tracing::info!(user = %user_id, dropped, "password reset; signed out every device");
 
     Ok(())
+}
+
+// --- invitations ----------------------------------------------------------
+
+/// How long an invitation stays open.
+const INVITATION_LIFETIME: std::time::Duration = std::time::Duration::from_secs(7 * 24 * 60 * 60);
+
+/// Invites an address to a workspace and e-mails the link.
+pub async fn invite_to_workspace(
+    state: &AppState,
+    actor: &crate::store::Actor,
+    workspace_id: &str,
+    email: &str,
+    role: relay_sync::Role,
+) -> ServerResult<crate::store::Invitation> {
+    let email = auth::validate_email(email)?;
+    let token = auth::new_session_token()?;
+    let expires_at = Timestamp::now().as_millis() + INVITATION_LIFETIME.as_millis() as i64;
+
+    let invitation = state
+        .store
+        .create_invitation(actor, workspace_id, &email, role, &token.hash, expires_at)
+        .await?;
+
+    let base = state.config.public_url.trim_end_matches('/');
+    let message = crate::mail::Email {
+        to: email.clone(),
+        subject: "You have been invited to a Relay workspace".to_string(),
+        body: format!(
+            "You have been invited to collaborate on a Relay workspace at \
+             {base}, as {article} {role}.\n\n\
+             Accept by opening:\n\n  {base}/invite?token={}\n\n\
+             The link works once and expires in seven days. If you were not \
+             expecting this, ignore it — nothing happens until the link is \
+             opened, and it only works for {email}.\n",
+            token.token,
+            article = match role {
+                relay_sync::Role::Admin | relay_sync::Role::Editor => "an",
+                relay_sync::Role::Viewer => "a",
+            },
+            role = role.as_str(),
+        ),
+    };
+
+    if let Err(error) = state.mailer.send(&message).await {
+        tracing::error!(%error, "could not send an invitation");
+    }
+
+    Ok(invitation)
+}
+
+/// Accepts an invitation for an already signed-in user.
+pub async fn accept_invitation(
+    state: &AppState,
+    user: &UserProfile,
+    token: &str,
+) -> ServerResult<relay_sync::Membership> {
+    state
+        .store
+        .accept_invitation(
+            &user.id,
+            &user.email,
+            &auth::hash_token(token),
+            Timestamp::now().as_millis(),
+        )
+        .await
 }

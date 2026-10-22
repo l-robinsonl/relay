@@ -62,6 +62,52 @@ pub async fn verify(State(state): State<AppState>, Query(query): Query<LinkToken
     }
 }
 
+/// `GET /invite?token=…`
+///
+/// Describes the invitation and nothing else. Accepting needs an
+/// account, and signing in happens in Relay rather than here: a page
+/// that asked for a password would be indistinguishable from a phishing
+/// page sent to the same address.
+pub async fn invite(State(state): State<AppState>, Query(query): Query<LinkToken>) -> Html<String> {
+    let offer = state
+        .store
+        .invitation_offer(
+            &crate::auth::hash_token(&query.token),
+            relay_models::Timestamp::now().as_millis(),
+        )
+        .await;
+
+    match offer {
+        Ok(Some(offer)) => Html(page(
+            "You have been invited",
+            "",
+            Some(&format!(
+                "<p>You have been invited to the workspace \
+                 <strong>{}</strong> as {}, at <strong>{}</strong>.</p>\
+                 <p>Open Relay, add this server under <em>Sync</em>, and sign \
+                 in — or create an account with that address. The invitation \
+                 is applied when you do.</p>\
+                 <p class=\"muted\">Relay never asks for your password on a \
+                 web page. If a page claiming to be Relay does, it is not us.</p>",
+                escape(&offer.workspace_name),
+                escape(offer.role.as_str()),
+                escape(&offer.email),
+            )),
+        )),
+        Ok(None) => Html(page(
+            "That invitation no longer works",
+            "It has been accepted already, or it expired. Ask whoever invited \
+             you to send another.",
+            None,
+        )),
+        Err(_) => Html(page(
+            "Something went wrong",
+            "The invitation could not be read. Try the link again.",
+            None,
+        )),
+    }
+}
+
 /// `GET /auth/reset?token=…`
 ///
 /// Shows a form and changes nothing. A GET that reset a password would

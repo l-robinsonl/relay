@@ -34,6 +34,7 @@ Phases 1–3 complete. Phase 4 mostly. Phase 5 part-done.
 | Packaging | `.deb` / `.rpm` / `.AppImage` build |
 | CI | GitHub Actions: Rust + desktop build on Linux/macOS/Windows, frontend, bindings drift, dependency audit |
 | Accounts | register from the app, e-mail confirmation, password reset, single-use hashed tokens, Resend or log-only |
+| Invitations | workspace + role, bound to the invited address, admin-only, revocable; `invite` signup mode now works |
 
 | Not built | |
 |---|---|
@@ -131,6 +132,10 @@ Run it: `npm run tauri dev`, or the built binary at
   exists because of this: a provider's refusal ("domain not verified")
   is the operator's only clue and contains no schema or query detail.
   Think twice before routing a new failure through `Internal`.
+- **An invitation is bound to the address it was sent to.** Not just
+  to its token. E-mails get forwarded, and a token-only check would
+  turn a forwarded invitation into access to someone else's workspace.
+  Both `accept_invitation` and registration enforce it.
 - **An e-mailed link has to lead somewhere.** The first cut of
   verification shipped messages pointing at `/auth/verify`, a route that
   did not exist, because every test posted to the JSON API instead of

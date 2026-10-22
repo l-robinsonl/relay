@@ -21,7 +21,10 @@ use sqlx::postgres::{PgPoolOptions, PgRow};
 use sqlx::{PgPool, Row};
 
 use super::logic::{self, CurrentState, MutationBatchRef, Verdict};
-use super::{Actor, EmailTokenPurpose, NewUser, ServerWorkspace, StoredUser, SyncStore};
+use super::{
+    Actor, EmailTokenPurpose, Invitation, InvitationOffer, NewUser, ServerWorkspace, StoredUser,
+    SyncStore,
+};
 use crate::error::{ServerError, ServerResult};
 
 /// A sync store backed by PostgreSQL.
@@ -459,6 +462,194 @@ impl SyncStore for PostgresStore {
         })
     }
 
+    async fn create_invitation(
+        &self,
+        actor: &Actor,
+        workspace_id: &str,
+        email: &str,
+        role: Role,
+        token_hash: &str,
+        expires_at: i64,
+    ) -> ServerResult<Invitation> {
+        self.authorise(workspace_id, &actor.user_id, Role::Admin)
+            .await?;
+
+        let id = uuid::Uuid::new_v4().to_string();
+        let now = now_millis();
+        let email = email.trim().to_lowercase();
+
+        sqlx::query(
+            "INSERT INTO relay.invitations
+                 (id, workspace_id, email, role, token_hash, invited_by,
+                  created_at, expires_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+        )
+        .bind(&id)
+        .bind(workspace_id)
+        .bind(&email)
+        .bind(role.as_str())
+        .bind(token_hash)
+        .bind(&actor.user_id)
+        .bind(now)
+        .bind(expires_at)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(Invitation {
+            id,
+            workspace_id: workspace_id.to_string(),
+            email,
+            role,
+            invited_by: actor.user_id.clone(),
+            created_at: now,
+            expires_at,
+        })
+    }
+
+    async fn invitation_offer(
+        &self,
+        token_hash: &str,
+        now: i64,
+    ) -> ServerResult<Option<InvitationOffer>> {
+        let row = sqlx::query(
+            "SELECT i.workspace_id, i.email, i.role, w.name
+             FROM relay.invitations i
+             JOIN relay.workspaces w ON w.id = i.workspace_id
+             WHERE i.token_hash = $1
+               AND i.accepted_at IS NULL
+               AND i.expires_at > $2",
+        )
+        .bind(token_hash)
+        .bind(now)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        row.map(|r| {
+            Ok(InvitationOffer {
+                workspace_id: r.get("workspace_id"),
+                workspace_name: r.get("name"),
+                email: r.get("email"),
+                role: role_from(r.get("role"))?,
+            })
+        })
+        .transpose()
+    }
+
+    async fn accept_invitation(
+        &self,
+        user_id: &str,
+        user_email: &str,
+        token_hash: &str,
+        now: i64,
+    ) -> ServerResult<Membership> {
+        let mut tx = self.pool.begin().await?;
+
+        // Claimed in the same statement that reads it: two clicks on the
+        // same link cannot both find it unaccepted.
+        let row = sqlx::query(
+            "UPDATE relay.invitations SET accepted_at = $1
+             WHERE token_hash = $2 AND accepted_at IS NULL AND expires_at > $1
+             RETURNING workspace_id, email, role",
+        )
+        .bind(now)
+        .bind(token_hash)
+        .fetch_optional(&mut *tx)
+        .await?;
+
+        let Some(row) = row else {
+            return Err(ServerError::BadRequest(
+                "that invitation has expired or has already been accepted".into(),
+            ));
+        };
+
+        let invited_email: String = row.get("email");
+        if !invited_email.eq_ignore_ascii_case(user_email.trim()) {
+            // Bound to the address it was sent to. A forwarded invitation
+            // must not hand a colleague access to someone else's data.
+            return Err(ServerError::BadRequest(format!(
+                "that invitation was sent to {invited_email}; sign in as that \
+                 address to accept it"
+            )));
+        }
+
+        let workspace_id: String = row.get("workspace_id");
+        let role = role_from(row.get("role"))?;
+
+        sqlx::query(
+            "INSERT INTO relay.memberships (workspace_id, user_id, role, created_at)
+             VALUES ($1, $2, $3, $4)
+             ON CONFLICT(workspace_id, user_id) DO UPDATE SET role = excluded.role",
+        )
+        .bind(&workspace_id)
+        .bind(user_id)
+        .bind(role.as_str())
+        .bind(now)
+        .execute(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+
+        Ok(Membership {
+            workspace_id,
+            user_id: user_id.to_string(),
+            role,
+            created_at: Timestamp(now),
+        })
+    }
+
+    async fn list_invitations(
+        &self,
+        actor: &Actor,
+        workspace_id: &str,
+    ) -> ServerResult<Vec<Invitation>> {
+        self.authorise(workspace_id, &actor.user_id, Role::Admin)
+            .await?;
+
+        let rows = sqlx::query(
+            "SELECT id, workspace_id, email, role, invited_by, created_at, expires_at
+             FROM relay.invitations
+             WHERE workspace_id = $1 AND accepted_at IS NULL AND expires_at > $2
+             ORDER BY created_at DESC",
+        )
+        .bind(workspace_id)
+        .bind(now_millis())
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.into_iter()
+            .map(|r| {
+                Ok(Invitation {
+                    id: r.get("id"),
+                    workspace_id: r.get("workspace_id"),
+                    email: r.get("email"),
+                    role: role_from(r.get("role"))?,
+                    invited_by: r.get("invited_by"),
+                    created_at: r.get("created_at"),
+                    expires_at: r.get("expires_at"),
+                })
+            })
+            .collect()
+    }
+
+    async fn revoke_invitation(
+        &self,
+        actor: &Actor,
+        workspace_id: &str,
+        invitation_id: &str,
+    ) -> ServerResult<()> {
+        self.authorise(workspace_id, &actor.user_id, Role::Admin)
+            .await?;
+
+        // Scoped to the workspace as well as the id, so an admin of one
+        // workspace cannot revoke another's by guessing an id.
+        sqlx::query("DELETE FROM relay.invitations WHERE id = $1 AND workspace_id = $2")
+            .bind(invitation_id)
+            .bind(workspace_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     async fn remove_membership(
         &self,
         actor: &Actor,
@@ -781,4 +972,15 @@ fn row_to_object(row: PgRow) -> ServerResult<SyncObject> {
         updated_by: row.get("updated_by"),
         payload: row.get("payload"),
     })
+}
+
+/// Reads a role out of a row.
+///
+/// The column has a CHECK constraint, so a value that will not parse
+/// means the database disagrees with its own schema. Saying so beats
+/// treating the row as absent, which would surface as "no such
+/// invitation" and send somebody looking in the wrong place.
+fn role_from(raw: String) -> ServerResult<Role> {
+    Role::parse(&raw)
+        .ok_or_else(|| ServerError::Internal(format!("stored role '{raw}' is not a known role")))
 }

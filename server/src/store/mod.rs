@@ -107,6 +107,42 @@ pub struct StoredUser {
     pub password_hash: String,
 }
 
+/// A pending invitation, as an administrator sees it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Invitation {
+    /// Its id, for revoking.
+    pub id: String,
+    /// Which workspace it grants access to.
+    pub workspace_id: String,
+    /// The address it was sent to.
+    pub email: String,
+    /// The role it grants. The holder cannot choose a better one.
+    pub role: Role,
+    /// Who sent it.
+    pub invited_by: String,
+    /// When it was sent, in epoch milliseconds.
+    pub created_at: i64,
+    /// When it stops working.
+    pub expires_at: i64,
+}
+
+/// What the holder of an invitation token is shown before accepting.
+///
+/// Deliberately thin: someone holding a token has not signed in yet, so
+/// this is readable without authentication and must not disclose more
+/// than the invitation itself.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InvitationOffer {
+    /// Which workspace, by id.
+    pub workspace_id: String,
+    /// Its name, so the page can say what is being offered.
+    pub workspace_name: String,
+    /// The address it was sent to.
+    pub email: String,
+    /// The role it grants.
+    pub role: Role,
+}
+
 /// Everything the server needs to persist.
 #[async_trait]
 pub trait SyncStore: Send + Sync + 'static {
@@ -194,6 +230,57 @@ pub trait SyncStore: Send + Sync + 'static {
 
     /// Signs every device out, by dropping all of a user's sessions.
     async fn delete_sessions_for_user(&self, user_id: &str) -> ServerResult<u64>;
+
+    // --- invitations -----------------------------------------------------
+
+    /// Invites an address to a workspace. Workspace administrators only.
+    async fn create_invitation(
+        &self,
+        actor: &Actor,
+        workspace_id: &str,
+        email: &str,
+        role: Role,
+        token_hash: &str,
+        expires_at: i64,
+    ) -> ServerResult<Invitation>;
+
+    /// Describes an unaccepted, unexpired invitation.
+    ///
+    /// Takes no [`Actor`]: holding the token is the credential, and the
+    /// recipient has to see what they are being offered before they can
+    /// have an account to be authorised as.
+    async fn invitation_offer(
+        &self,
+        token_hash: &str,
+        now: i64,
+    ) -> ServerResult<Option<InvitationOffer>>;
+
+    /// Accepts an invitation on behalf of a user, joining the workspace.
+    ///
+    /// One transaction: the membership and the `accepted_at` stamp land
+    /// together, so a token cannot be redeemed twice by racing.
+    async fn accept_invitation(
+        &self,
+        user_id: &str,
+        user_email: &str,
+        token_hash: &str,
+        now: i64,
+    ) -> ServerResult<Membership>;
+
+    /// Lists the invitations still outstanding. Administrators only.
+    async fn list_invitations(
+        &self,
+        actor: &Actor,
+        workspace_id: &str,
+    ) -> ServerResult<Vec<Invitation>>;
+
+    /// Withdraws an invitation. Administrators only.
+    async fn revoke_invitation(
+        &self,
+        actor: &Actor,
+        workspace_id: &str,
+        invitation_id: &str,
+    ) -> ServerResult<()>;
 
     // --- workspaces and membership -----------------------------------------
 

@@ -135,6 +135,11 @@ All of it is under `/v1`, with `/health` outside for load balancers.
 |---|---|---|
 | `GET` | `/health` | anyone |
 | `POST` | `/v1/auth/register` | anyone, subject to `RELAY_SIGNUP_MODE` |
+| `POST` | `/v1/workspaces/{id}/invitations` | workspace administrators |
+| `GET` | `/v1/workspaces/{id}/invitations` | workspace administrators |
+| `DELETE` | `/v1/workspaces/{id}/invitations/{inv}` | workspace administrators |
+| `GET` | `/v1/invitations/{token}` | whoever holds the token |
+| `POST` | `/v1/invitations/{token}/accept` | the invited address |
 | `POST` | `/v1/auth/verify/request` | anyone; always 204 |
 | `POST` | `/v1/auth/verify/confirm` | anyone with the token |
 | `POST` | `/v1/auth/password/reset` | anyone; always 204 |
@@ -258,3 +263,35 @@ logged with the provider's own explanation.
   address returns exactly what a known one returns, and sends nothing.
   A repeat request within a minute is silently suppressed rather than
   rate-limit-errored, because an error would itself confirm the address.
+
+## Invitations
+
+`RELAY_SIGNUP_MODE=invite` is the usual setting for a team server:
+nobody can register unless a workspace administrator has invited their
+address. Bootstrap the first account with `RELAY_ADMIN_EMAIL` and
+`RELAY_ADMIN_PASSWORD`, then invite everyone else from inside Relay.
+
+An invitation names a workspace **and a role**, so inviting someone is
+the same act as deciding what they may do. A caller who names no role
+gets `viewer`, the least privileged.
+
+### What an invitation guarantees
+
+- **Only administrators issue them.** An editor can change content but
+  cannot widen who else can — the check lives inside the store method,
+  so no handler can forget it.
+- **Bound to the address it was sent to.** E-mails get forwarded; an
+  invitation that admitted whoever opened the link would turn a
+  forwarded message into access to someone else's data. Registering or
+  accepting with a different address is refused, and says which address
+  the invitation was for.
+- **Accepted once**, in one transaction with the membership, so two
+  clicks cannot both succeed.
+- **Expires after seven days**, and can be revoked before then.
+- **Scoped on revoke.** Revoking checks the workspace as well as the
+  invitation id, so an administrator of one workspace cannot revoke
+  another's by guessing.
+- **The landing page never asks for a password.** It says which
+  workspace, which role and which address, and sends you to Relay. A
+  page that asked for a password would be indistinguishable from a
+  phishing page sent to the same address, and it says so.
