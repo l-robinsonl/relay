@@ -175,6 +175,38 @@ fn form_body(token: &str, problem: Option<&str>) -> String {
     )
 }
 
+/// `GET /billing/done`
+///
+/// Where Stripe sends the browser after a successful checkout. It
+/// exists because the checkout session names it as `success_url`: a
+/// person who has just paid and lands on a 404 has no way of knowing
+/// whether the money went anywhere.
+///
+/// It deliberately claims nothing about the subscription. The
+/// authority on that is the webhook, which may not have arrived yet,
+/// and this page has no session to look anything up with.
+pub async fn billing_done() -> Html<String> {
+    Html(page(
+        "Thank you",
+        "Your subscription is being set up. Go back to Relay — the seats \
+         will appear in the Sync dialog within a few moments.",
+        None,
+    ))
+}
+
+/// `GET /billing/cancelled`
+///
+/// The `cancel_url`. Reached by pressing back out of Stripe's page,
+/// which is not an error and should not read like one.
+pub async fn billing_cancelled() -> Html<String> {
+    Html(page(
+        "Nothing was charged",
+        "You left before paying, so no subscription was started. You can \
+         close this tab; Relay is unchanged.",
+        None,
+    ))
+}
+
 /// Wraps content in the one page template.
 fn page(heading: &str, detail: &str, body: Option<&str>) -> String {
     let detail = if detail.is_empty() {

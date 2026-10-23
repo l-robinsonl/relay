@@ -35,8 +35,8 @@ pub mod auth;
 pub mod protocol;
 
 pub use auth::{
-    Invitation, InvitationOffer, InvitationView, LoginRequest, LoginResponse, MemberView,
-    Membership, Role, UserProfile,
+    BillingView, Invitation, InvitationOffer, InvitationView, LoginRequest, LoginResponse,
+    MemberView, Membership, Role, UserProfile,
 };
 pub use protocol::{
     ApplyResult, ChangePage, EntityKind, Mutation, MutationBatch, MutationOutcome, SyncError,

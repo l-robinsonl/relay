@@ -1826,6 +1826,7 @@ async fn a_self_hosted_server_charges_for_nothing() {
     assert_eq!(body["active"], true);
     assert_eq!(body["members"], 1);
     assert_eq!(body["hasSubscription"], false);
+    assert_eq!(body["canManage"], true);
     assert!(body.get("seats").is_none(), "unmetered means no seat limit");
 }
 
@@ -1841,6 +1842,42 @@ async fn billing_tells_a_stranger_nothing_about_a_workspace() {
         .get_auth("/v1/workspaces/w1/billing", &outsider)
         .await;
     assert_eq!(response.status(), 404);
+}
+
+#[tokio::test]
+async fn a_member_who_is_not_an_administrator_is_not_offered_the_buttons() {
+    // The panel disables them from this flag. The role check on the
+    // routes is the real guard; this only stops a pointless click.
+    let server = start(SignupMode::Open).await;
+    let ada = owner_with_workspace(&server).await;
+    let bob = server.sign_up("bob@example.com").await;
+
+    let bob_id = server
+        .get_auth("/v1/auth/me", &bob)
+        .await
+        .json::<Value>()
+        .await
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    server
+        .client
+        .put(server.url(&format!("/v1/workspaces/w1/members/{bob_id}")))
+        .bearer_auth(&ada)
+        .json(&json!({ "role": "editor" }))
+        .send()
+        .await
+        .unwrap();
+
+    let body: Value = server
+        .get_auth("/v1/workspaces/w1/billing", &bob)
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(body["canManage"], false);
+    assert_eq!(body["members"], 2, "an editor still sees the seat count");
 }
 
 #[tokio::test]
@@ -1902,6 +1939,67 @@ async fn a_checkout_buys_a_seat_for_every_member() {
     // Both places, because only one of them comes back on each event.
     assert!(form.contains("client_reference_id=w1"), "{form}");
     assert!(form.contains("workspace_id%5D=w1"), "{form}");
+}
+
+#[tokio::test]
+async fn the_urls_stripe_returns_the_browser_to_actually_exist() {
+    // Twice before, a flow has sent a person to a route that was never
+    // built. Here the destination is written into the checkout
+    // session, so the only honest check is to pull the URLs back out
+    // of what was sent to Stripe and follow them.
+    let stub = StubStripe::start().await;
+    let server = start_billing(&stub).await;
+    let token = owner_with_workspace(&server).await;
+
+    server
+        .post_auth("/v1/workspaces/w1/billing/checkout", &token, json!({}))
+        .await;
+
+    let form = stub.body("/v1/checkout/sessions");
+    let mut followed = 0;
+    for field in form.split('&') {
+        let Some((name, value)) = field.split_once('=') else {
+            continue;
+        };
+        if name != "success_url" && name != "cancel_url" {
+            continue;
+        }
+
+        let url = percent_decode(value);
+        let path = url
+            .strip_prefix("https://relay.test")
+            .unwrap_or_else(|| panic!("{name} left the configured public URL: {url}"));
+
+        let response = server.get(path).await;
+        assert_eq!(response.status(), 200, "{name} ({path}) led nowhere");
+        assert!(
+            response.text().await.unwrap().contains("RELAY"),
+            "{name} did not serve a Relay page"
+        );
+        followed += 1;
+    }
+
+    assert_eq!(followed, 2, "the session named no return URLs at all");
+}
+
+/// Decodes a form-encoded value. Enough for the URLs above.
+fn percent_decode(value: &str) -> String {
+    let bytes = value.replace('+', " ").into_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or("");
+            if let Ok(byte) = u8::from_str_radix(hex, 16) {
+                out.push(byte);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8(out).unwrap()
 }
 
 #[tokio::test]

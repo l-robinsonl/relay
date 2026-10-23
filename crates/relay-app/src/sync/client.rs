@@ -427,6 +427,97 @@ impl SyncClient {
 
         parse(response).await
     }
+
+    /// What the workspace is entitled to, and whether it is paid for.
+    pub async fn billing(
+        &self,
+        token: &str,
+        workspace_id: &str,
+    ) -> RelayResult<relay_sync::BillingView> {
+        let response = self
+            .http
+            .get(format!(
+                "{}/v1/workspaces/{workspace_id}/billing",
+                self.base_url
+            ))
+            .bearer_auth(token)
+            .send()
+            .await
+            .map_err(transport_error)?;
+
+        parse(response).await
+    }
+
+    /// Starts a checkout, returning the URL to open in a browser.
+    ///
+    /// Relay never renders a payment form. The card details belong to
+    /// Stripe's page, in the system browser, where the person can see
+    /// the address bar — not inside a desktop app's webview.
+    pub async fn billing_checkout(
+        &self,
+        token: &str,
+        workspace_id: &str,
+        seats: Option<u32>,
+    ) -> RelayResult<String> {
+        let response = self
+            .http
+            .post(format!(
+                "{}/v1/workspaces/{workspace_id}/billing/checkout",
+                self.base_url
+            ))
+            .bearer_auth(token)
+            .json(&serde_json::json!({ "seats": seats }))
+            .send()
+            .await
+            .map_err(transport_error)?;
+
+        let view: RedirectView = parse(response).await?;
+        checked_payment_url(view.url)
+    }
+
+    /// Opens Stripe's customer portal, returning the URL.
+    pub async fn billing_portal(&self, token: &str, workspace_id: &str) -> RelayResult<String> {
+        let response = self
+            .http
+            .post(format!(
+                "{}/v1/workspaces/{workspace_id}/billing/portal",
+                self.base_url
+            ))
+            .bearer_auth(token)
+            .send()
+            .await
+            .map_err(transport_error)?;
+
+        let view: RedirectView = parse(response).await?;
+        checked_payment_url(view.url)
+    }
+}
+
+/// Refuses a payment URL that is not https.
+///
+/// This URL is handed straight to the operating system to open. The
+/// sync server is one the user chose, but a compromised or hostile
+/// one should not be able to make Relay launch `file:///…` or a
+/// custom scheme registered by something else on the machine. Stripe
+/// only ever answers with https.
+fn checked_payment_url(url: String) -> RelayResult<String> {
+    if url.starts_with("https://") {
+        return Ok(url);
+    }
+
+    Err(RelayError::new(
+        ErrorKind::Sync,
+        "the server answered with a payment link that is not https",
+    )
+    .with_detail(
+        "Relay will not open it. Check which server this workspace is connected to.".to_string(),
+    ))
+}
+
+/// Where the server wants the browser sent.
+#[derive(Debug, Clone, serde::Deserialize)]
+struct RedirectView {
+    url: String,
 }
 
 /// What `/health` reports.
@@ -508,6 +599,24 @@ mod tests {
         assert!(SyncClient::new("relay.internal").is_err());
         assert!(SyncClient::new("https://relay.internal").is_ok());
         assert!(SyncClient::new("http://localhost:8787").is_ok());
+    }
+
+    #[test]
+    fn a_payment_link_that_is_not_https_is_refused() {
+        // It goes straight to the OS to open.
+        assert!(checked_payment_url("https://checkout.stripe.com/c/pay/x".into()).is_ok());
+        for hostile in [
+            "file:///etc/passwd",
+            "http://checkout.stripe.com/c/pay/x",
+            "javascript:alert(1)",
+            "relay://something",
+            " https://checkout.stripe.com",
+        ] {
+            assert!(
+                checked_payment_url(hostile.into()).is_err(),
+                "opened {hostile}"
+            );
+        }
     }
 
     #[test]

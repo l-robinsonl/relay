@@ -6,6 +6,7 @@ import { api } from '@/services/ipc'
 import { formatRelativeTime } from '@/composables/useFormat'
 import { useDialogStore } from '@/stores/dialogs'
 import { useSyncStore } from '@/stores/sync'
+import BillingPanel from '@/features/sync/BillingPanel.vue'
 import MembersPanel from '@/features/sync/MembersPanel.vue'
 import { useWorkspaceStore } from '@/stores/workspace'
 
@@ -315,6 +316,12 @@ async function disconnect () {
                  ask, which is why it lives inside the connected branch. -->
             <div v-if="workspace.current" class="border-t border-subtle pt-3">
               <MembersPanel :workspace-id="workspace.current.id" :open="open" />
+            </div>
+
+            <!-- Seats. Renders nothing at all unless the server
+                 charges, so self-hosting shows no trace of billing. -->
+            <div v-if="workspace.current">
+              <BillingPanel :workspace-id="workspace.current.id" :open="open" />
             </div>
           </div>
 

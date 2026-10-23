@@ -233,6 +233,10 @@ pub fn router(state: AppState) -> Router {
             post(routes::billing_portal),
         )
         .route("/v1/billing/webhook", post(routes::billing_webhook))
+        // Where Stripe returns the browser. Named in every checkout
+        // session, so they have to exist.
+        .route("/billing/done", get(crate::pages::billing_done))
+        .route("/billing/cancelled", get(crate::pages::billing_cancelled))
         .route("/v1/invitations/{token}", get(routes::invitation_offer))
         .route(
             "/v1/invitations/{token}/accept",

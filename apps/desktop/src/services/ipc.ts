@@ -10,6 +10,7 @@ import type {
   OAuth2Config,
   InvitationOffer,
   InvitationView,
+  BillingView,
   MemberView,
   RelayError,
   RequestDoc,
@@ -350,6 +351,16 @@ export const api = {
   /** Progress while a turn runs. Returns an unsubscribe function. */
   onAssistantEvent: (handler: (event: AssistantEvent) => void): Promise<UnlistenFn> =>
     listen<AssistantEvent>('relay://assistant', (e) => handler(e.payload)),
+
+  // --- billing -------------------------------------------------------------
+  syncBilling: (workspaceId: string) =>
+    call<BillingView>('sync_billing', { workspaceId }),
+  /** Opens Stripe's checkout in the system browser. Returns the URL it
+   *  opened, so the panel can offer it as a link if nothing appeared. */
+  syncBillingCheckout: (workspaceId: string, seats?: number | null) =>
+    call<string>('sync_billing_checkout', { workspaceId, seats: seats ?? null }),
+  syncBillingPortal: (workspaceId: string) =>
+    call<string>('sync_billing_portal', { workspaceId }),
 
   // --- membership ----------------------------------------------------------
   syncMembers: (workspaceId: string) =>

@@ -168,6 +168,37 @@ pub struct Invitation {
     pub accepted: bool,
 }
 
+/// What a workspace is entitled to, as the client sees it.
+///
+/// Shared rather than server-only: the billing panel has to render
+/// exactly what the server decided, and a second definition on the
+/// client would drift the moment a status was added.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct BillingView {
+    /// Whether this deployment charges at all. False when self-hosted,
+    /// and the whole panel is hidden when it is.
+    pub metered: bool,
+    /// Seats paid for, when there is a limit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seats: Option<u32>,
+    /// How many of them are taken.
+    pub members: u32,
+    /// Whether the subscription is in good standing.
+    pub active: bool,
+    /// Anything the person should be told, in their own words.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notice: Option<String>,
+    /// Whether there is a Stripe customer to open a portal for.
+    pub has_subscription: bool,
+    /// Whether the person asking may start a checkout or open the
+    /// portal. The server knows their role; asking it here saves the
+    /// client from keeping a second copy of the rule, and a disabled
+    /// button beats a 404 after the click.
+    pub can_manage: bool,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

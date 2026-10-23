@@ -563,35 +563,15 @@ async fn handle_socket(mut socket: WebSocket, state: AppState, workspace_id: Str
 
 // --- billing ---------------------------------------------------------------
 
-/// What a workspace is entitled to, as the client sees it.
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct BillingView {
-    /// Whether this deployment charges at all. False when self-hosted.
-    pub metered: bool,
-    /// Seats paid for, when there is a limit.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub seats: Option<u32>,
-    /// How many of them are taken.
-    pub members: u32,
-    /// Whether the subscription is in good standing.
-    pub active: bool,
-    /// Anything the person should be told.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub notice: Option<String>,
-    /// Whether there is a Stripe customer to open a portal for.
-    pub has_subscription: bool,
-}
-
 /// `GET /v1/workspaces/{id}/billing`
 pub async fn billing_status(
     State(state): State<AppState>,
     Path(workspace_id): Path<String>,
     user: AuthenticatedUser,
-) -> ServerResult<Json<BillingView>> {
+) -> ServerResult<Json<relay_sync::BillingView>> {
     // Membership is the authorisation: the seat count is not secret
     // from the people occupying the seats.
-    state
+    let membership = state
         .store
         .membership(&workspace_id, &user.0.id)
         .await?
@@ -600,13 +580,14 @@ pub async fn billing_status(
     let entitlement = state.store.entitlement(&workspace_id).await?;
     let subscription = state.store.subscription(&workspace_id).await?;
 
-    Ok(Json(BillingView {
+    Ok(Json(relay_sync::BillingView {
         metered: state.config.bills(),
         seats: entitlement.seats,
         members: state.store.member_count(&workspace_id).await?,
         active: entitlement.active,
         notice: entitlement.notice,
         has_subscription: subscription.is_some(),
+        can_manage: membership.role == Role::Admin,
     }))
 }
 

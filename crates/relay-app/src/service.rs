@@ -1103,6 +1103,33 @@ impl RelayService {
         client.list_members(&token, workspace.as_str()).await
     }
 
+    /// What the workspace is entitled to, and whether it is paid for.
+    pub async fn sync_billing(
+        &self,
+        workspace: WorkspaceId,
+    ) -> RelayResult<relay_sync::BillingView> {
+        let (client, token) = self.sync_session(&workspace).await?;
+        client.billing(&token, workspace.as_str()).await
+    }
+
+    /// Starts a checkout, returning the URL for the browser.
+    pub async fn sync_billing_checkout(
+        &self,
+        workspace: WorkspaceId,
+        seats: Option<u32>,
+    ) -> RelayResult<String> {
+        let (client, token) = self.sync_session(&workspace).await?;
+        client
+            .billing_checkout(&token, workspace.as_str(), seats)
+            .await
+    }
+
+    /// Opens Stripe's customer portal, returning the URL.
+    pub async fn sync_billing_portal(&self, workspace: WorkspaceId) -> RelayResult<String> {
+        let (client, token) = self.sync_session(&workspace).await?;
+        client.billing_portal(&token, workspace.as_str()).await
+    }
+
     /// Changes what a member may do.
     pub async fn sync_set_member_role(
         &self,

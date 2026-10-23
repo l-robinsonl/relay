@@ -737,6 +737,61 @@ pub async fn sync_members(
     service.sync_members(workspace_id).await
 }
 
+// --- billing ---------------------------------------------------------------
+
+/// What the workspace is entitled to, and whether it is paid for.
+#[tauri::command]
+pub async fn sync_billing(
+    service: State<'_, RelayService>,
+    workspace_id: WorkspaceId,
+) -> RelayResult<relay_app::sync::BillingView> {
+    service.sync_billing(workspace_id).await
+}
+
+/// Starts a checkout and opens it in the user's browser.
+///
+/// The same reasoning as the OAuth flow: card details belong on
+/// Stripe's own page in a real browser, where the address bar is
+/// visible, not inside a desktop app's webview.
+#[tauri::command]
+pub async fn sync_billing_checkout(
+    app: tauri::AppHandle,
+    service: State<'_, RelayService>,
+    workspace_id: WorkspaceId,
+    seats: Option<u32>,
+) -> RelayResult<String> {
+    let url = service.sync_billing_checkout(workspace_id, seats).await?;
+    open_externally(&app, &url)?;
+    Ok(url)
+}
+
+/// Opens Stripe's customer portal in the user's browser.
+#[tauri::command]
+pub async fn sync_billing_portal(
+    app: tauri::AppHandle,
+    service: State<'_, RelayService>,
+    workspace_id: WorkspaceId,
+) -> RelayResult<String> {
+    let url = service.sync_billing_portal(workspace_id).await?;
+    open_externally(&app, &url)?;
+    Ok(url)
+}
+
+/// Hands a URL to the system browser.
+///
+/// The URL is returned to the caller as well as opened, so the panel
+/// can offer it as a link when the browser does not appear — on a
+/// bare Linux session there may be no handler registered at all.
+fn open_externally(app: &tauri::AppHandle, url: &str) -> RelayResult<()> {
+    use tauri_plugin_opener::OpenerExt;
+    app.opener().open_url(url, None::<&str>).map_err(|e| {
+        RelayError::new(
+            relay_models::ErrorKind::Io,
+            format!("could not open your browser: {e}"),
+        )
+    })
+}
+
 /// Changes what a member may do.
 #[tauri::command]
 pub async fn sync_set_member_role(
