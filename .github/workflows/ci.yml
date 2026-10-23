@@ -5,8 +5,13 @@ on:
     # Both names deliberately: this workflow sat dormant for a week
     # because it watched `main` while the branch was `master`.
     branches: [master, main]
+    # A release tag gets the full matrix; see `choose_runners`.
+    tags: ["v*"]
   pull_request:
   workflow_dispatch:
+  schedule:
+    - cron: "0 4 * * 1"
+
 
 # A second push supersedes the first; no point finishing a run nobody
 # will read.
@@ -23,13 +28,41 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
+  # Decides which runners this run uses. A cheap Linux job so the
+  # decision is made once and both matrices agree.
+  choose_runners:
+    name: Choose runners
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.pick.outputs.matrix }}
+    steps:
+      - id: pick
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ] \
+            || [ "${{ github.event_name }}" = "workflow_dispatch" ] \
+            || [ "${{ startsWith(github.ref, 'refs/tags/') }}" = "true" ]; then
+            echo 'matrix=["ubuntu-latest","macos-latest","windows-latest"]' >> "$GITHUB_OUTPUT"
+            echo "Running the full matrix."
+          else
+            echo 'matrix=["ubuntu-latest"]' >> "$GITHUB_OUTPUT"
+            echo "Linux only. macOS and Windows run weekly, on a tag, or on request."
+          fi
+
   rust:
     name: Rust (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        # Linux on every push; the others only when
+        # `choose_runners` says so. On a private repository macOS bills at 10x and
+        # Windows at 2x, and the two macOS jobs alone came to roughly
+        # a tenth of a free month's allowance per commit. Linux
+        # catches nearly everything; what it misses — a path
+        # separator, a line ending, a platform-gated dependency —
+        # does not change between Monday and Friday.
+        os: ${{ fromJSON(needs.choose_runners.outputs.matrix) }}
+    needs: [choose_runners]
     steps:
       - uses: actions/checkout@v5
 
@@ -83,7 +116,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: ${{ fromJSON(needs.choose_runners.outputs.matrix) }}
+    needs: [choose_runners]
     steps:
       - uses: actions/checkout@v5
 
@@ -122,7 +156,12 @@ jobs:
         run: |
           python3 - <<'PY'
           import yaml
-          for path in ['docker-compose.yml', 'deploy/compose.prod.yml', 'render.yaml']:
+          # The workflow itself is in the list: a syntax error in it
+          # shows up as a run that never starts, which on a repository
+          # with a billing problem is indistinguishable from the
+          # billing problem.
+          for path in ['docker-compose.yml', 'deploy/compose.prod.yml', 'render.yaml',
+                       '.github/workflows/ci.yml']:
               with open(path) as handle:
                   yaml.safe_load(handle)
               print(f'{path}: ok')
