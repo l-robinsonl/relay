@@ -1,0 +1,69 @@
+# Deploying Relay's sync server to Render.
+#
+#   Render → New → Blueprint → point it at this repository.
+#
+# The free instance type has no persistent disk, so SQLite is not an
+# option here: the file would vanish on every restart and every wake
+# from sleep. That is why RELAY_DATABASE_URL below is required and must
+# point at PostgreSQL — Neon's free tier is a good match, and between
+# the two the whole deployment costs nothing.
+#
+# The free instance also sleeps after about fifteen minutes idle. Relay
+# survives that better than most: the client queues its edits and the
+# live-update socket reconnects with backoff. What you lose while it
+# sleeps is immediacy — a teammate's change lands on the next sync
+# rather than within moments — and the first request after a sleep
+# waits for a cold start.
+
+services:
+  - type: web
+    name: relay-sync
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    region: frankfurt
+    healthCheckPath: /health
+
+    envVars:
+      - key: RELAY_BIND
+        value: 0.0.0.0:8787
+
+      # Render routes to whatever the service listens on; being explicit
+      # keeps the Dockerfile's default and this in step.
+      - key: PORT
+        value: 8787
+
+      # Required. A PostgreSQL URL — Neon, Render's own, anything.
+      # sync: false means Render asks for it rather than storing it here,
+      # which is where a connection string with a password belongs.
+      - key: RELAY_DATABASE_URL
+        sync: false
+
+      # Must be the address people actually reach, because it is what
+      # goes into every e-mailed link. Render gives the service a
+      # name.onrender.com address; use that until a custom domain exists.
+      - key: RELAY_PUBLIC_URL
+        sync: false
+
+      - key: RELAY_SIGNUP_MODE
+        value: invite
+
+      # Consumed on first boot to create the first administrator, then
+      # ignored. Clear them from the dashboard once it exists.
+      - key: RELAY_ADMIN_EMAIL
+        sync: false
+      - key: RELAY_ADMIN_PASSWORD
+        sync: false
+
+      # Without these, confirmation and invitation links are written to
+      # the service log instead of being sent.
+      - key: RESEND_API_KEY
+        sync: false
+      - key: RELAY_MAIL_FROM
+        sync: false
+
+      - key: RELAY_REQUIRE_VERIFIED_EMAIL
+        value: "false"
+
+      - key: RELAY_LOG
+        value: info,sqlx=warn

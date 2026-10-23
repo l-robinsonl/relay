@@ -116,6 +116,18 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      # A typo in a deployment file shows up as a failed deploy at the
+      # least convenient moment, so it is parsed here instead.
+      - name: Deployment files parse
+        run: |
+          python3 - <<'PY'
+          import yaml
+          for path in ['docker-compose.yml', 'deploy/compose.prod.yml', 'render.yaml']:
+              with open(path) as handle:
+                  yaml.safe_load(handle)
+              print(f'{path}: ok')
+          PY
+
       - uses: docker/setup-buildx-action@v3
 
       # Built here rather than only written, because a Dockerfile that

@@ -298,6 +298,9 @@ gets `viewer`, the least privileged.
 
 ## Running it
 
+Step-by-step instructions for Render and for a VM are in
+[DEPLOYING.md](DEPLOYING.md). What follows is the shape of it.
+
 ### Docker Compose
 
 ```sh

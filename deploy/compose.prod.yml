@@ -1,0 +1,61 @@
+# Relay behind Caddy on a VM you control.
+#
+#   export RELAY_DOMAIN=sync.example.com
+#   docker compose -f deploy/compose.prod.yml up -d
+#
+# Caddy gets a certificate from Let's Encrypt on first start, which
+# needs ports 80 and 443 reachable and the domain's A record already
+# pointing here. Nothing else to configure.
+
+services:
+  relay:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: relay-server:local
+    restart: unless-stopped
+    # No published ports: Caddy is the only thing that should reach it,
+    # and binding 8787 on the host would expose it beside the proxy.
+    expose:
+      - "8787"
+    environment:
+      RELAY_BIND: 0.0.0.0:8787
+      RELAY_DATABASE_URL: ${RELAY_DATABASE_URL:-sqlite:///data/relay.db}
+      RELAY_PUBLIC_URL: https://${RELAY_DOMAIN:?set RELAY_DOMAIN}
+      RELAY_SIGNUP_MODE: ${RELAY_SIGNUP_MODE:-invite}
+      RELAY_ADMIN_EMAIL: ${RELAY_ADMIN_EMAIL:-}
+      RELAY_ADMIN_PASSWORD: ${RELAY_ADMIN_PASSWORD:-}
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      RELAY_MAIL_FROM: ${RELAY_MAIL_FROM:-}
+      RELAY_REQUIRE_VERIFIED_EMAIL: ${RELAY_REQUIRE_VERIFIED_EMAIL:-true}
+      RELAY_LOG: ${RELAY_LOG:-info,sqlx=warn}
+    volumes:
+      - relay-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8787/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      RELAY_DOMAIN: ${RELAY_DOMAIN:?set RELAY_DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Certificates survive a restart; without this Caddy re-requests
+      # one every time and will hit Let's Encrypt's rate limit.
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - relay
+
+volumes:
+  relay-data:
+  caddy-data:
+  caddy-config:

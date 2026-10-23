@@ -1,0 +1,29 @@
+# TLS, and a route to Relay. Caddy obtains and renews the certificate
+# itself, which is the whole reason it is here rather than nginx.
+#
+# Replace the hostname, then `docker compose -f deploy/compose.prod.yml up -d`.
+
+{$RELAY_DOMAIN} {
+	encode zstd gzip
+
+	# The live-update socket. Caddy proxies WebSocket upgrades without
+	# any special configuration, but the timeout matters: a sync
+	# connection is idle most of the time by design, and a proxy that
+	# closes idle connections turns live updates into a reconnect loop.
+	reverse_proxy relay:8787 {
+		transport http {
+			read_timeout 0
+			write_timeout 0
+		}
+	}
+
+	# Relay serves no user content and runs no third-party script, so
+	# these cost nothing and remove a class of mistake.
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+}
