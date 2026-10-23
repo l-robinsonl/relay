@@ -37,7 +37,7 @@ Phases 1–3 complete. Phase 4 mostly. Phase 5 part-done.
 | Invitations | workspace + role, bound to the invited address, admin-only, revocable; `invite` signup mode now works |
 | Members UI | invite, change a role, remove, withdraw an invitation — all from the Sync dialog |
 | Joining | an invitee pastes the link, picks a password, and lands in the workspace with its contents |
-| Assistant (in progress) | `relay-agent`: providers, risk-classified tool registry, the loop. Nine tools over the workspace. Conversations persist (migration 3). **Verified against a real model** — see `assistant_live.rs`. No UI and no MCP yet |
+| Assistant | `relay-agent` loop + nine tools + persistence + a docked chat panel with inline approval (Ctrl+J). Verified against a real model. **No MCP yet** |
 | Packaging (server) | Dockerfile + compose, unprivileged, healthcheck; CI builds and smoke-tests the image |
 
 | Not built | |
@@ -163,6 +163,16 @@ Run it: `npm run tauri dev`, or the built binary at
   wrote. `list_environments` reports names and the secret flag, never
   values; `get_request` redacts credential-shaped headers. Both have
   tests in `crates/relay-app/tests/assistant_tools.rs`.
+- **Approval is a parked channel, and silence means no.** The loop is
+  in Rust, the question is in a window. `AskTheUser` parks on a
+  oneshot, the interface is told, and `assistant_approve` resolves it.
+  A dropped sender — window closed, turn abandoned — resolves to
+  `Deny`, never a hang: a tool that sends a request must not run
+  because nobody answered.
+- **The approve buttons are not disabled while the turn is busy.** The
+  turn is *always* in flight when they are on screen — it is in flight
+  because it is waiting for that answer — so a `:disabled="busy"` made
+  them dead exactly when needed. A test caught it; keep the test.
 - **`ToolRisk` decides what gets confirmed.** `Send` and `Destructive`
   always ask. `Send` is its own level because a request Relay makes is
   indistinguishable at the far end from one the user made, and "list

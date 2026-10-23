@@ -12,6 +12,7 @@ export const useSettingsStore = defineStore('settings', () => {
   const sidebarWidth = ref(260)
   const responseSize = ref(50)
   const sidebarVisible = ref(true)
+  const assistantVisible = ref(false)
   const ready = ref(false)
 
   function applyTheme () {
@@ -36,8 +37,12 @@ export const useSettingsStore = defineStore('settings', () => {
             sidebarWidth: number
             responseSize: number
             sidebarVisible: boolean
+            assistantVisible: boolean
           }>
           if (parsed.orientation) orientation.value = parsed.orientation
+          if (typeof parsed.assistantVisible === 'boolean') {
+            assistantVisible.value = parsed.assistantVisible
+          }
           if (typeof parsed.sidebarWidth === 'number') {
             sidebarWidth.value = clamp(parsed.sidebarWidth, 180, 560)
           }
@@ -65,6 +70,7 @@ export const useSettingsStore = defineStore('settings', () => {
         sidebarWidth: sidebarWidth.value,
         responseSize: responseSize.value,
         sidebarVisible: sidebarVisible.value,
+        assistantVisible: assistantVisible.value,
       }),
     )
   }
@@ -98,18 +104,26 @@ export const useSettingsStore = defineStore('settings', () => {
     saveTimer = setTimeout(() => void persistLayout(), 400)
   })
 
+  /** Shows or hides the assistant column. */
+  function toggleAssistant () {
+    assistantVisible.value = !assistantVisible.value
+    persistLayout()
+  }
+
   return {
     theme,
     orientation,
     sidebarWidth,
     responseSize,
     sidebarVisible,
+    assistantVisible,
     ready,
     load,
     setTheme,
     toggleTheme,
     toggleOrientation,
     toggleSidebar,
+    toggleAssistant,
     persistLayout,
   }
 })

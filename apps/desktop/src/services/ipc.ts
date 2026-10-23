@@ -111,6 +111,59 @@ export interface OAuthTokenStatus {
   canRefresh: boolean
 }
 
+// --- the assistant ---------------------------------------------------------
+
+/** Which model the assistant uses, and where. */
+export interface AssistantSettings {
+  provider: 'anthropic' | 'openai' | 'compatible'
+  model: string
+  baseUrl: string
+}
+
+/** A saved conversation, without its messages. */
+export interface Conversation {
+  id: string
+  workspaceId: string
+  title: string
+  createdAt: number
+  updatedAt: number
+}
+
+/** A call the assistant asked for. */
+export interface ToolCall {
+  id: string
+  name: string
+  input: unknown
+}
+
+/** What a tool produced. */
+export interface ToolResult {
+  callId: string
+  outcome: { content: string, isError: boolean }
+}
+
+/** One stored message. */
+export interface StoredMessage {
+  id: string
+  conversationId: string
+  role: 'user' | 'assistant'
+  body: string
+  toolCalls: ToolCall[]
+  toolResults: ToolResult[]
+  position: number
+  createdAt: number
+}
+
+/** How much a tool can cost you if the model is wrong. */
+export type ToolRisk = 'read' | 'write' | 'destructive' | 'send'
+
+/** Progress while a turn runs. */
+export type AssistantEvent =
+  | { type: 'said', text: string }
+  | { type: 'running', call: ToolCall }
+  | { type: 'ran', result: ToolResult }
+  | { type: 'asking', call: ToolCall, risk: ToolRisk }
+
 /** An exchange together with whatever its tests reported. */
 export interface SendOutcome {
   exchange: HttpExchange
@@ -252,6 +305,34 @@ export const api = {
   // --- application state --------------------------------------------------------
   // --- synchronisation ----------------------------------------------------
   syncProbe: (serverUrl: string) => call<ServerHealth>('sync_probe', { serverUrl }),
+  // --- the assistant -------------------------------------------------------
+  assistantAsk: (
+    workspaceId: string,
+    conversationId: string | null,
+    question: string,
+    settings: AssistantSettings,
+  ) =>
+    call<string>('assistant_ask', { workspaceId, conversationId, question, settings }),
+  assistantApprove: (callId: string, allow: boolean) =>
+    call<boolean>('assistant_approve', { callId, allow }),
+  assistantDenyAll: () => call<void>('assistant_deny_all'),
+  assistantConversations: (workspaceId: string) =>
+    call<Conversation[]>('assistant_conversations', { workspaceId }),
+  assistantMessages: (conversationId: string) =>
+    call<StoredMessage[]>('assistant_messages', { conversationId }),
+  assistantDeleteConversation: (conversationId: string) =>
+    call<void>('assistant_delete_conversation', { conversationId }),
+  assistantSetKey: (provider: string, key: string) =>
+    call<void>('assistant_set_key', { provider, key }),
+  assistantClearKey: (provider: string) =>
+    call<void>('assistant_clear_key', { provider }),
+  assistantHasKey: (provider: string) =>
+    call<boolean>('assistant_has_key', { provider }),
+
+  /** Progress while a turn runs. Returns an unsubscribe function. */
+  onAssistantEvent: (handler: (event: AssistantEvent) => void): Promise<UnlistenFn> =>
+    listen<AssistantEvent>('relay://assistant', (e) => handler(e.payload)),
+
   // --- membership ----------------------------------------------------------
   syncMembers: (workspaceId: string) =>
     call<MemberView[]>('sync_members', { workspaceId }),

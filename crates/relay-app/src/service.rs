@@ -1659,3 +1659,304 @@ mod invitation_tests {
         );
     }
 }
+
+// --- the assistant ---------------------------------------------------------
+
+/// What the assistant is configured to use.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssistantSettings {
+    /// `anthropic`, `openai`, or `compatible` for anything else.
+    pub provider: String,
+    /// The model id. Empty means the provider's default.
+    #[serde(default)]
+    pub model: String,
+    /// For a local or third-party endpoint speaking the OpenAI shape.
+    #[serde(default)]
+    pub base_url: String,
+}
+
+impl Default for AssistantSettings {
+    fn default() -> Self {
+        Self {
+            provider: "anthropic".into(),
+            model: String::new(),
+            base_url: String::new(),
+        }
+    }
+}
+
+/// Where the assistant's key lives in the credential store.
+///
+/// Reusing the secret store rather than inventing a second one: it is
+/// already the OS keyring, already has a memory fallback for a headless
+/// machine, and already never reaches the webview.
+fn assistant_key_scope() -> EnvironmentId {
+    EnvironmentId::from("assistant")
+}
+
+impl RelayService {
+    /// Stores the key for a provider.
+    pub fn assistant_set_key(&self, provider: &str, key: &str) -> RelayResult<()> {
+        self.secrets
+            .set(&assistant_key_scope(), provider, key)
+            .map_err(|e| RelayError::new(ErrorKind::SecretStore, e))
+    }
+
+    /// Forgets the key for a provider.
+    pub fn assistant_clear_key(&self, provider: &str) -> RelayResult<()> {
+        self.secrets
+            .delete(&assistant_key_scope(), provider)
+            .map_err(|e| RelayError::new(ErrorKind::SecretStore, e))
+    }
+
+    /// Whether a key is set. Never returns the key itself.
+    pub fn assistant_has_key(&self, provider: &str) -> bool {
+        self.secrets
+            .get(&assistant_key_scope(), provider)
+            .is_some_and(|k| !k.trim().is_empty())
+    }
+
+    /// Reads a key, falling back to the environment.
+    ///
+    /// The environment fallback is for development: a contributor with
+    /// `ANTHROPIC_API_KEY` already exported should not have to paste it
+    /// into a settings box as well. The keyring wins when both are set.
+    fn assistant_key(&self, provider: &str) -> Option<String> {
+        self.secrets
+            .get(&assistant_key_scope(), provider)
+            .filter(|k| !k.trim().is_empty())
+            .or_else(|| {
+                let variable = match provider {
+                    "anthropic" => "ANTHROPIC_API_KEY",
+                    "openai" => "OPENAI_API_KEY",
+                    _ => return None,
+                };
+                std::env::var(variable)
+                    .ok()
+                    .filter(|k| !k.trim().is_empty())
+            })
+    }
+
+    /// Builds the configured provider.
+    fn assistant_provider(
+        &self,
+        settings: &AssistantSettings,
+    ) -> RelayResult<Arc<dyn relay_agent::provider::ModelProvider>> {
+        let missing = |name: &str| {
+            RelayError::new(ErrorKind::Invalid, format!("no API key is set for {name}"))
+                .with_detail("Add one under Settings → Assistant.".to_string())
+        };
+
+        match settings.provider.as_str() {
+            "openai" => {
+                let key = self
+                    .assistant_key("openai")
+                    .ok_or_else(|| missing("OpenAI"))?;
+                Ok(Arc::new(
+                    relay_agent::provider::OpenAiProvider::new(key)
+                        .map_err(|e| RelayError::new(ErrorKind::Invalid, e.to_string()))?,
+                ))
+            }
+            // A local endpoint usually wants no key at all, so an empty
+            // one is not an error here.
+            "compatible" => {
+                let base = if settings.base_url.trim().is_empty() {
+                    return Err(RelayError::new(
+                        ErrorKind::Invalid,
+                        "set the endpoint address for a compatible provider",
+                    ));
+                } else {
+                    settings.base_url.trim().to_string()
+                };
+
+                Ok(Arc::new(
+                    relay_agent::provider::OpenAiProvider::with_base_url(
+                        self.assistant_key("compatible").unwrap_or_default(),
+                        base,
+                        "the configured endpoint",
+                    )
+                    .map_err(|e| RelayError::new(ErrorKind::Invalid, e.to_string()))?,
+                ))
+            }
+            _ => {
+                let key = self
+                    .assistant_key("anthropic")
+                    .ok_or_else(|| missing("Anthropic"))?;
+                Ok(Arc::new(
+                    relay_agent::provider::AnthropicProvider::new(key)
+                        .map_err(|e| RelayError::new(ErrorKind::Invalid, e.to_string()))?,
+                ))
+            }
+        }
+    }
+
+    /// The conversations in a workspace, most recently touched first.
+    pub async fn assistant_conversations(
+        &self,
+        workspace: WorkspaceId,
+    ) -> RelayResult<Vec<relay_storage::Conversation>> {
+        Ok(self
+            .db
+            .call(move |c| relay_storage::ConversationRepo::list(c, &workspace, 100))
+            .await?)
+    }
+
+    /// Everything said in one conversation.
+    pub async fn assistant_messages(
+        &self,
+        conversation: String,
+    ) -> RelayResult<Vec<relay_storage::StoredMessage>> {
+        Ok(self
+            .db
+            .call(move |c| relay_storage::ConversationRepo::messages(c, &conversation))
+            .await?)
+    }
+
+    /// Deletes a conversation.
+    pub async fn assistant_delete_conversation(&self, conversation: String) -> RelayResult<()> {
+        self.db
+            .call(move |c| relay_storage::ConversationRepo::delete(c, &conversation))
+            .await?;
+        Ok(())
+    }
+
+    /// Asks the assistant something, running tools until it answers.
+    ///
+    /// Creates the conversation on the first message. Everything the
+    /// turn produced is persisted before this returns, so a crash
+    /// mid-answer loses the answer but never the question.
+    pub async fn assistant_ask(
+        &self,
+        workspace: WorkspaceId,
+        conversation: Option<String>,
+        question: String,
+        settings: AssistantSettings,
+        approvals: Arc<crate::assistant::Approvals>,
+        events: Arc<dyn crate::assistant::EventSink>,
+    ) -> RelayResult<String> {
+        let provider = self.assistant_provider(&settings)?;
+
+        // A new conversation is titled from the question, trimmed, so
+        // the list reads as a list of topics.
+        let conversation_id = match conversation {
+            Some(id) => id,
+            None => {
+                let id = uuid::Uuid::now_v7().to_string();
+                let title: String = question.chars().take(60).collect();
+                let workspace = workspace.clone();
+                let new_id = id.clone();
+                self.db
+                    .call(move |c| {
+                        relay_storage::ConversationRepo::create(
+                            c,
+                            &new_id,
+                            &workspace,
+                            title.trim(),
+                        )
+                    })
+                    .await?;
+                id
+            }
+        };
+
+        let history = self.assistant_history(&conversation_id).await?;
+
+        let agent = relay_agent::Agent::new(
+            provider,
+            crate::assistant::registry(self.clone(), workspace),
+            SYSTEM_PROMPT,
+        )
+        .with_model(settings.model.clone())
+        .with_approver(Arc::new(crate::assistant::AskTheUser::new(
+            approvals,
+            events.clone(),
+        )))
+        .with_progress(Arc::new(crate::assistant::Forwarding::new(events)));
+
+        let turn = agent
+            .run(&history, relay_agent::provider::Message::user(question))
+            .await
+            .map_err(|e| {
+                RelayError::new(ErrorKind::Internal, e.to_string()).with_detail(
+                    if e.is_retryable() {
+                        "Worth trying again."
+                    } else {
+                        "Check the assistant settings."
+                    }
+                    .to_string(),
+                )
+            })?;
+
+        let rows: Vec<_> = turn
+            .messages
+            .iter()
+            .map(|message| {
+                (
+                    match message.role {
+                        relay_agent::provider::Role::User => "user".to_string(),
+                        relay_agent::provider::Role::Assistant => "assistant".to_string(),
+                    },
+                    message.text.clone(),
+                    serde_json::to_value(&message.tool_calls).unwrap_or_default(),
+                    serde_json::to_value(&message.tool_results).unwrap_or_default(),
+                )
+            })
+            .collect();
+
+        let id = conversation_id.clone();
+        self.db
+            .call(move |c| relay_storage::ConversationRepo::append(c, &id, &rows))
+            .await?;
+
+        Ok(conversation_id)
+    }
+
+    /// Replays a stored conversation into the shape the model expects.
+    async fn assistant_history(
+        &self,
+        conversation: &str,
+    ) -> RelayResult<Vec<relay_agent::provider::Message>> {
+        let id = conversation.to_string();
+        let stored = self
+            .db
+            .call(move |c| relay_storage::ConversationRepo::messages(c, &id))
+            .await?;
+
+        Ok(stored
+            .into_iter()
+            .map(|row| relay_agent::provider::Message {
+                role: if row.role == "assistant" {
+                    relay_agent::provider::Role::Assistant
+                } else {
+                    relay_agent::provider::Role::User
+                },
+                text: row.body,
+                tool_calls: serde_json::from_value(row.tool_calls).unwrap_or_default(),
+                tool_results: serde_json::from_value(row.tool_results).unwrap_or_default(),
+            })
+            .collect())
+    }
+}
+
+/// What the assistant is told about itself.
+///
+/// Short on purpose. A long prompt listing every tool duplicates the
+/// descriptions the tools already carry, and the two drift apart.
+const SYSTEM_PROMPT: &str = "\
+You are the assistant inside Relay, a local-first API client. You help the person \
+with the HTTP requests, collections and environments in their workspace.
+
+Use the tools rather than guessing. When they name a request in words, list the \
+requests first to find its id.
+
+You cannot read the value of a secret variable, and you cannot read a credential \
+already set on a request — both come back redacted, by design. You can still \
+reference a secret by name: write {{thatVariable}} into a URL, header or body and \
+Relay substitutes it when the request is actually sent.
+
+Sending a request reaches a real server with the person's credentials, and deleting \
+something destroys their work, so they are asked before either. If they decline, do \
+not try it again — ask what they would rather do.
+
+Be brief. Say what you did, not what you are about to do.";

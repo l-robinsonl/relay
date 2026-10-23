@@ -5,6 +5,7 @@ import {
   Loader2,
   Moon,
   PanelLeft,
+  Sparkles,
   Rows2,
   Sun,
   Terminal,
@@ -19,6 +20,7 @@ import ImportDialog from '@/features/import-export/ImportDialog.vue'
 import RelayLogo from '@/components/ui/RelayLogo.vue'
 import SyncIndicator from '@/features/sync/SyncIndicator.vue'
 import SyncSettings from '@/features/sync/SyncSettings.vue'
+import AssistantPanel from '@/features/assistant/AssistantPanel.vue'
 import RequestPanel from '@/features/request/RequestPanel.vue'
 import ResponsePanel from '@/features/response/ResponsePanel.vue'
 import SplitPane from '@/components/ui/SplitPane.vue'
@@ -138,6 +140,13 @@ const shortcuts = computed<Shortcut[]>(() => [
     allowInInput: true,
     description: 'Toggle the sidebar',
     handler: () => settings.toggleSidebar(),
+  },
+  {
+    key: 'j',
+    mod: true,
+    allowInInput: true,
+    description: 'Toggle the assistant',
+    handler: () => settings.toggleAssistant(),
   },
   {
     key: 'v',
@@ -270,6 +279,16 @@ onBeforeUnmount(() => {
         <PanelLeft :size="14" />
       </button>
 
+      <button
+        type="button"
+        class="btn btn-ghost p-1.5"
+        :aria-pressed="settings.assistantVisible"
+        :title="`Toggle the assistant (${describeShortcut({ key: 'j', mod: true })})`"
+        @click="settings.toggleAssistant()"
+      >
+        <Sparkles :size="14" />
+      </button>
+
       <RelayLogo :size="15" wordmark title="Relay" />
 
       <button
@@ -361,6 +380,17 @@ onBeforeUnmount(() => {
           </template>
         </EmptyState>
       </main>
+
+      <!-- A docked column, not a modal. The point is to watch it work
+           on the request you are looking at, and to read a tool call in
+           the context of why it was made. Same overflow-hidden reason
+           as the sidebar. -->
+      <div
+        v-if="settings.assistantVisible"
+        class="w-[26rem] min-w-0 shrink-0 overflow-hidden border-l border-subtle"
+      >
+        <AssistantPanel />
+      </div>
     </div>
 
     <CommandPalette

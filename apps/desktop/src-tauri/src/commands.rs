@@ -791,3 +791,118 @@ pub async fn sync_revoke_invitation(
         .sync_revoke_invitation(workspace_id, invitation_id)
         .await
 }
+
+// --- the assistant ---------------------------------------------------------
+
+/// The channel carrying assistant progress to the webview.
+pub const ASSISTANT_EVENT: &str = "relay://assistant";
+
+/// Forwards assistant events to the window.
+struct WindowEvents {
+    app: tauri::AppHandle,
+}
+
+impl relay_app::assistant::EventSink for WindowEvents {
+    fn emit(&self, event: relay_app::assistant::AssistantEvent) {
+        let _ = self.app.emit(ASSISTANT_EVENT, event);
+    }
+}
+
+/// The approvals waiting on an answer, shared across commands.
+///
+/// One set for the whole application rather than one per turn: the
+/// command that answers arrives on its own, with only a call id to go
+/// on, and ids are unique.
+#[derive(Default)]
+pub struct PendingApprovals(pub std::sync::Arc<relay_app::assistant::Approvals>);
+
+/// Asks the assistant something.
+///
+/// Returns the conversation id, which the caller keeps for the next
+/// question. Progress arrives on `relay://assistant` while this runs.
+#[tauri::command]
+pub async fn assistant_ask(
+    app: tauri::AppHandle,
+    service: State<'_, RelayService>,
+    approvals: State<'_, PendingApprovals>,
+    workspace_id: WorkspaceId,
+    conversation_id: Option<String>,
+    question: String,
+    settings: relay_app::service::AssistantSettings,
+) -> RelayResult<String> {
+    service
+        .assistant_ask(
+            workspace_id,
+            conversation_id,
+            question,
+            settings,
+            approvals.0.clone(),
+            Arc::new(WindowEvents { app }),
+        )
+        .await
+}
+
+/// Answers a tool call the assistant is waiting on.
+#[tauri::command]
+pub fn assistant_approve(
+    approvals: State<'_, PendingApprovals>,
+    call_id: String,
+    allow: bool,
+) -> bool {
+    approvals.0.resolve(&call_id, allow)
+}
+
+/// Denies everything outstanding, for when a turn is abandoned.
+#[tauri::command]
+pub fn assistant_deny_all(approvals: State<'_, PendingApprovals>) {
+    approvals.0.deny_all();
+}
+
+/// The conversations in a workspace.
+#[tauri::command]
+pub async fn assistant_conversations(
+    service: State<'_, RelayService>,
+    workspace_id: WorkspaceId,
+) -> RelayResult<Vec<relay_storage::Conversation>> {
+    service.assistant_conversations(workspace_id).await
+}
+
+/// Everything said in one conversation.
+#[tauri::command]
+pub async fn assistant_messages(
+    service: State<'_, RelayService>,
+    conversation_id: String,
+) -> RelayResult<Vec<relay_storage::StoredMessage>> {
+    service.assistant_messages(conversation_id).await
+}
+
+/// Deletes a conversation.
+#[tauri::command]
+pub async fn assistant_delete_conversation(
+    service: State<'_, RelayService>,
+    conversation_id: String,
+) -> RelayResult<()> {
+    service.assistant_delete_conversation(conversation_id).await
+}
+
+/// Stores an API key for a provider. The key never comes back out.
+#[tauri::command]
+pub fn assistant_set_key(
+    service: State<'_, RelayService>,
+    provider: String,
+    key: String,
+) -> RelayResult<()> {
+    service.assistant_set_key(&provider, &key)
+}
+
+/// Forgets a provider's key.
+#[tauri::command]
+pub fn assistant_clear_key(service: State<'_, RelayService>, provider: String) -> RelayResult<()> {
+    service.assistant_clear_key(&provider)
+}
+
+/// Whether a key is set, without disclosing it.
+#[tauri::command]
+pub fn assistant_has_key(service: State<'_, RelayService>, provider: String) -> bool {
+    service.assistant_has_key(&provider)
+}

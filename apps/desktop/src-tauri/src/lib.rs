@@ -56,6 +56,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(service)
         .manage(commands::SyncWatchers::default())
+        .manage(commands::PendingApprovals::default())
         .invoke_handler(tauri::generate_handler![
             commands::workspace_list,
             commands::workspace_active,
@@ -100,6 +101,15 @@ pub fn run() {
             commands::import_apply,
             commands::export_workspace,
             commands::export_curl,
+            commands::assistant_ask,
+            commands::assistant_approve,
+            commands::assistant_deny_all,
+            commands::assistant_conversations,
+            commands::assistant_messages,
+            commands::assistant_delete_conversation,
+            commands::assistant_set_key,
+            commands::assistant_clear_key,
+            commands::assistant_has_key,
             commands::sync_probe,
             commands::sync_register,
             commands::sync_invitation_offer,
