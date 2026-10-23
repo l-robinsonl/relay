@@ -37,7 +37,7 @@ Phases 1–3 complete. Phase 4 mostly. Phase 5 part-done.
 | Invitations | workspace + role, bound to the invited address, admin-only, revocable; `invite` signup mode now works |
 | Members UI | invite, change a role, remove, withdraw an invitation — all from the Sync dialog |
 | Joining | an invitee pastes the link, picks a password, and lands in the workspace with its contents |
-| Assistant (in progress) | `relay-agent`: providers, risk-classified tool registry, the loop. `relay-app/src/assistant/`: nine tools over the workspace. No persistence, no UI, no MCP yet |
+| Assistant (in progress) | `relay-agent`: providers, risk-classified tool registry, the loop. Nine tools over the workspace. Conversations persist (migration 3). **Verified against a real model** — see `assistant_live.rs`. No UI and no MCP yet |
 | Packaging (server) | Dockerfile + compose, unprivileged, healthcheck; CI builds and smoke-tests the image |
 
 | Not built | |
@@ -49,8 +49,8 @@ Phases 1–3 complete. Phase 4 mostly. Phase 5 part-done.
 
 ```sh
 . "$HOME/.cargo/env"            # rustup installed with --no-modify-path
-cargo test --workspace          # 540
-npx vitest run --root apps/desktop   # 122
+cargo test --workspace          # 739
+npm test                        # 161 frontend
 cargo clippy --workspace --all-targets -- -D warnings
 npm run build
 npm run bindings                # regenerate TS from Rust; must be a no-op
@@ -115,11 +115,14 @@ Run it: `npm run tauri dev`, or the built binary at
   it stays dependency-free, `NeonAuthenticator` for Cloud. Map Neon
   identity to a Relay user and keep workspace membership ours;
   `neon_auth.organization` is a parallel concept, not our workspaces.
-- **MSRV is 1.88, raised from 1.85 to take security fixes.** `time`
-  0.3.47+ (RUSTSEC-2026-0009) and `plist` 1.10+ (which pulls `quick-xml`
-  past two DoS advisories) both need it. Relay is an application, not a
-  library anyone builds against, so the promise cost nothing to raise.
-  Raising it also makes clippy enforce let-chains, which is why
+- **MSRV is 1.94, and that is the true floor.** It went 1.85 → 1.88 to
+  take `time` 0.3.47+ (RUSTSEC-2026-0009) and `plist` 1.10+ (which
+  pulls `quick-xml` past two DoS advisories), then → 1.94 because sqlx
+  0.9 refuses anything below it. That last one had been false for
+  months: every machine building this ran something newer, and it took
+  pinning an older toolchain in the container to notice. Relay is an
+  application, not a library anyone builds against, so raising it costs
+  nothing. It also makes clippy enforce let-chains, which is why
   `interpolate.rs` uses one.
 - **A configured-but-broken Postgres must fail, not skip.**
   `postgres_store()` in the conformance suite used to `.ok()?` on a
@@ -267,8 +270,19 @@ Quote PSS. Never quote a figure this project did not measure.
 
 ## Next
 
-1. Phase 6/7 — Relay Cloud on Neon, then Stripe. Billing last, by the
+1. The assistant's interface, then MCP.
+2. Phase 6/7 — Relay Cloud on Neon, then Stripe. Billing last, by the
    user's own sequencing.
+
+**The assistant has a live test.** `crates/relay-app/tests/assistant_live.rs`
+runs the real loop against a real model, skipping unless
+`ANTHROPIC_API_KEY` or `OPENAI_API_KEY` is set (it prefers Claude). One
+of its two tests asks the model directly for a secret variable's value
+and a pasted `Authorization` header, then asserts that neither canary
+string appears anywhere — including in the raw tool results, because a
+leak into a tool result is a leak even if the model then declines to
+repeat it. Lee's OpenAI key is in `.env.local`; there is no Anthropic
+key yet.
 
 **CI runs** at `github.com/l-robinsonl/relay`, on push to `master` or
 `main` and on pull requests. Its first run proved the workspace builds
