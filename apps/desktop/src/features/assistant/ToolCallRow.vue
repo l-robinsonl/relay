@@ -100,9 +100,15 @@ const pretty = computed(() => JSON.stringify(props.call.input, null, 2))
              flight while this is on screen — it is in flight *because*
              it is waiting for this answer — so disabling on `busy`
              would disable the buttons exactly when they are needed. -->
+        <!-- Red when it destroys something, not the inviting blue.
+             Both answers were styled identically, so the button with
+             the most visual pull — the one people hit to make a
+             prompt go away — was the one that deletes. The colour
+             should say which of the two you cannot take back. -->
         <button
           type="button"
-          class="btn btn-primary text-xs"
+          class="btn text-xs"
+          :class="asking === 'destructive' ? 'btn-danger' : 'btn-primary'"
           @click.stop="emit('answer', true)"
         >
           <Check :size="12" />
