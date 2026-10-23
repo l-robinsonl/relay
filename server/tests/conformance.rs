@@ -1356,3 +1356,218 @@ async fn inviting_sweeps_lapsed_and_accepted_invitations() {
     })
     .await;
 }
+
+// --- billing ---------------------------------------------------------------
+
+use relay_server::billing::{Subscription, SubscriptionStatus};
+
+fn subscription(workspace: &str, status: SubscriptionStatus, seats: u32) -> Subscription {
+    Subscription {
+        workspace_id: workspace.into(),
+        customer_id: format!("cus_{workspace}"),
+        subscription_id: Some(format!("sub_{workspace}")),
+        status,
+        seats,
+        current_period_end: Some(in_an_hour()),
+    }
+}
+
+#[tokio::test]
+async fn a_workspace_with_no_subscription_is_unmetered() {
+    // Self-hosting never writes a row, and a workspace predating
+    // billing must keep working rather than silently losing its seats.
+    for_each_backend(|store| async move {
+        let owner = seed_user(&store, "ada@example.com").await;
+        store.create_workspace(&owner, "w1", "Team").await.unwrap();
+
+        let entitlement = store.entitlement("w1").await.unwrap();
+        assert_eq!(entitlement.seats, None);
+        assert!(entitlement.active);
+        assert!(entitlement.allows(10_000));
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn seats_stop_an_invitation_once_they_run_out() {
+    for_each_backend(|store| async move {
+        let owner = seed_user(&store, "ada@example.com").await;
+        store.create_workspace(&owner, "w1", "Team").await.unwrap();
+
+        // One seat, and the owner already occupies it.
+        store
+            .save_subscription(&subscription("w1", SubscriptionStatus::Active, 1))
+            .await
+            .unwrap();
+
+        let error = store
+            .create_invitation(
+                &owner,
+                "w1",
+                "grace@example.com",
+                Role::Editor,
+                "inv-seat",
+                in_an_hour(),
+            )
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(error, ServerError::LimitExceeded { limit: "seats", .. }),
+            "{error:?}"
+        );
+        assert!(error.to_string().contains("Add a seat"), "{error}");
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_spare_seat_lets_the_invitation_through() {
+    for_each_backend(|store| async move {
+        let owner = seed_user(&store, "ada@example.com").await;
+        store.create_workspace(&owner, "w1", "Team").await.unwrap();
+        store
+            .save_subscription(&subscription("w1", SubscriptionStatus::Active, 5))
+            .await
+            .unwrap();
+
+        assert!(
+            store
+                .create_invitation(
+                    &owner,
+                    "w1",
+                    "grace@example.com",
+                    Role::Editor,
+                    "inv-ok",
+                    in_an_hour(),
+                )
+                .await
+                .is_ok()
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_failed_payment_does_not_stop_a_team_working() {
+    // past_due still entitles. Stripe retries for days and the usual
+    // cause is a bank's fraud check; locking a team out over it would
+    // be the worse mistake.
+    for_each_backend(|store| async move {
+        let owner = seed_user(&store, "ada@example.com").await;
+        store.create_workspace(&owner, "w1", "Team").await.unwrap();
+        store
+            .save_subscription(&subscription("w1", SubscriptionStatus::PastDue, 5))
+            .await
+            .unwrap();
+
+        let entitlement = store.entitlement("w1").await.unwrap();
+        assert!(entitlement.active);
+        assert!(entitlement.notice.unwrap().contains("still works"));
+
+        assert!(
+            store
+                .create_invitation(
+                    &owner,
+                    "w1",
+                    "g@example.com",
+                    Role::Viewer,
+                    "i1",
+                    in_an_hour()
+                )
+                .await
+                .is_ok()
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_cancelled_subscription_stops_growth_only() {
+    for_each_backend(|store| async move {
+        let owner = seed_user(&store, "ada@example.com").await;
+        store.create_workspace(&owner, "w1", "Team").await.unwrap();
+        store
+            .save_subscription(&subscription("w1", SubscriptionStatus::Canceled, 5))
+            .await
+            .unwrap();
+
+        // Cannot invite...
+        assert!(
+            store
+                .create_invitation(
+                    &owner,
+                    "w1",
+                    "g@example.com",
+                    Role::Viewer,
+                    "i1",
+                    in_an_hour()
+                )
+                .await
+                .is_err()
+        );
+
+        // ...but the workspace is entirely usable, which is the point.
+        assert!(store.head(&owner, "w1").await.is_ok());
+        assert!(store.list_workspaces(&owner).await.unwrap().len() == 1);
+        assert!(store.export(&owner, "w1").await.is_ok());
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_subscription_round_trips_including_an_unknown_status() {
+    for_each_backend(|store| async move {
+        let owner = seed_user(&store, "ada@example.com").await;
+        store.create_workspace(&owner, "w1", "Team").await.unwrap();
+
+        let mut saved = subscription("w1", SubscriptionStatus::Active, 3);
+        store.save_subscription(&saved).await.unwrap();
+        assert_eq!(store.subscription("w1").await.unwrap().unwrap(), saved);
+
+        // Updating in place rather than accumulating rows.
+        saved.seats = 7;
+        saved.status = SubscriptionStatus::PastDue;
+        store.save_subscription(&saved).await.unwrap();
+
+        let read = store.subscription("w1").await.unwrap().unwrap();
+        assert_eq!(read.seats, 7);
+        assert_eq!(read.status, SubscriptionStatus::PastDue);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_customer_can_be_traced_back_to_its_workspace() {
+    // A webhook names the customer, never the workspace.
+    for_each_backend(|store| async move {
+        let owner = seed_user(&store, "ada@example.com").await;
+        store.create_workspace(&owner, "w1", "Team").await.unwrap();
+        store
+            .save_subscription(&subscription("w1", SubscriptionStatus::Active, 2))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            store.workspace_for_customer("cus_w1").await.unwrap(),
+            Some("w1".to_string())
+        );
+        assert_eq!(
+            store.workspace_for_customer("cus_nobody").await.unwrap(),
+            None
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn an_event_is_applied_once_however_many_times_it_arrives() {
+    // Stripe retries until acknowledged. Without this, a replayed
+    // event could double a seat count.
+    for_each_backend(|store| async move {
+        assert!(store.claim_billing_event("evt_1").await.unwrap());
+        assert!(!store.claim_billing_event("evt_1").await.unwrap());
+        assert!(store.claim_billing_event("evt_2").await.unwrap());
+    })
+    .await;
+}

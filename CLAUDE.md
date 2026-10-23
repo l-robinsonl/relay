@@ -253,6 +253,14 @@ Run it: `npm run tauri dev`, or the built binary at
   is also where the Neon Auth JWKS endpoint is. `RELAY_DATABASE_URL`
   once pointed at the c-8 host with dbname `relay`, a database that
   exists only on c-7, so every Postgres test silently skipped.
+- **`RELAY_TEST_DATABASE_URL` points at the DIRECT host, not the
+  pooler.** The suite drops and recreates the schema, and a
+  transaction-mode pooler keeps server-side prepared statements across
+  runs: after a column changes type, every query fails with "cached
+  plan must not change result type" and stays failing. Disabling
+  sqlx's own cache (which `PostgresStore::connect` now does) stops new
+  stale plans but cannot clear ones the pooler already holds. The
+  endpoint without `-pooler` in the hostname is the one to use.
 - **`RELAY_TEST_DATABASE_URL` is the scratch database** (`relay_test`)
   for the conformance suite, which drops the schema every run. Never
   aim it at `relay`; the suite now refuses a database whose name has no

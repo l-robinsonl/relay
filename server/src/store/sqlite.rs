@@ -91,6 +91,7 @@ impl SyncStore for SqliteStore {
         for sql in [
             include_str!("../../migrations/sqlite/0001_initial.sql"),
             include_str!("../../migrations/sqlite/0002_email_tokens.sql"),
+            include_str!("../../migrations/sqlite/0003_billing.sql"),
         ] {
             sqlx::raw_sql(sql)
                 .execute(&self.pool)
@@ -478,6 +479,101 @@ impl SyncStore for SqliteStore {
         })
     }
 
+    async fn entitlement(&self, workspace_id: &str) -> ServerResult<crate::billing::Entitlement> {
+        match self.subscription(workspace_id).await? {
+            // No row is unmetered, not unpaid. Self-hosting never
+            // writes one, and a workspace predating billing keeps
+            // working rather than silently losing its seats.
+            None => Ok(crate::billing::Entitlement::unmetered()),
+            Some(subscription) => Ok(subscription.entitlement()),
+        }
+    }
+
+    async fn save_subscription(
+        &self,
+        subscription: &crate::billing::Subscription,
+    ) -> ServerResult<()> {
+        sqlx::query(
+            "INSERT INTO subscriptions
+                 (workspace_id, customer_id, subscription_id, status, seats,
+                  current_period_end, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+             ON CONFLICT(workspace_id) DO UPDATE SET
+                 customer_id = excluded.customer_id,
+                 subscription_id = excluded.subscription_id,
+                 status = excluded.status,
+                 seats = excluded.seats,
+                 current_period_end = excluded.current_period_end,
+                 updated_at = excluded.updated_at",
+        )
+        .bind(&subscription.workspace_id)
+        .bind(&subscription.customer_id)
+        .bind(&subscription.subscription_id)
+        .bind(status_text(subscription.status))
+        .bind(subscription.seats as i64)
+        .bind(subscription.current_period_end)
+        .bind(now_millis())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn subscription(
+        &self,
+        workspace_id: &str,
+    ) -> ServerResult<Option<crate::billing::Subscription>> {
+        let row = sqlx::query(
+            "SELECT workspace_id, customer_id, subscription_id, status, seats,
+                    current_period_end
+             FROM subscriptions WHERE workspace_id = ?1",
+        )
+        .bind(workspace_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.map(|r| crate::billing::Subscription {
+            workspace_id: r.get("workspace_id"),
+            customer_id: r.get("customer_id"),
+            subscription_id: r.get("subscription_id"),
+            status: crate::billing::SubscriptionStatus::parse(&r.get::<String, _>("status")),
+            seats: r.get::<i64, _>("seats").max(0) as u32,
+            current_period_end: r.get("current_period_end"),
+        }))
+    }
+
+    async fn workspace_for_customer(&self, customer_id: &str) -> ServerResult<Option<String>> {
+        let row = sqlx::query("SELECT workspace_id FROM subscriptions WHERE customer_id = ?1")
+            .bind(customer_id)
+            .fetch_optional(&self.pool)
+            .await?;
+
+        Ok(row.map(|r| r.get("workspace_id")))
+    }
+
+    async fn claim_billing_event(&self, event_id: &str) -> ServerResult<bool> {
+        // The insert itself is the claim: two deliveries racing cannot
+        // both succeed on a primary key.
+        let result = sqlx::query(
+            "INSERT INTO billing_events (event_id, applied_at) VALUES (?1, ?2)
+             ON CONFLICT(event_id) DO NOTHING",
+        )
+        .bind(event_id)
+        .bind(now_millis())
+        .execute(&self.pool)
+        .await?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn member_count(&self, workspace_id: &str) -> ServerResult<u32> {
+        let row = sqlx::query("SELECT COUNT(*) AS n FROM memberships WHERE workspace_id = ?1")
+            .bind(workspace_id)
+            .fetch_one(&self.pool)
+            .await?;
+
+        Ok(row.get::<i64, _>("n").max(0) as u32)
+    }
+
     async fn create_invitation(
         &self,
         actor: &Actor,
@@ -489,6 +585,22 @@ impl SyncStore for SqliteStore {
     ) -> ServerResult<Invitation> {
         self.authorise(workspace_id, &actor.user_id, Role::Admin)
             .await?;
+
+        // Seats bound growth and nothing else. Checked here rather
+        // than in a handler, for the same reason authorisation is:
+        // every route that adds a person goes through this.
+        let entitlement = self.entitlement(workspace_id).await?;
+        if !entitlement.active || !entitlement.allows(self.member_count(workspace_id).await?) {
+            return Err(ServerError::LimitExceeded {
+                limit: "seats",
+                message: entitlement.notice.unwrap_or_else(|| {
+                    format!(
+                        "this workspace is paid for {} people. Add a seat to invite another.",
+                        entitlement.seats.unwrap_or(0)
+                    )
+                }),
+            });
+        }
 
         let id = uuid::Uuid::new_v4().to_string();
         let now = now_millis();
@@ -1008,4 +1120,19 @@ fn row_to_object(row: sqlx::sqlite::SqliteRow) -> ServerResult<SyncObject> {
 fn role_from(raw: String) -> ServerResult<Role> {
     Role::parse(&raw)
         .ok_or_else(|| ServerError::Internal(format!("stored role '{raw}' is not a known role")))
+}
+
+/// How a status is written to the database.
+///
+/// Stripe's own spelling, so a status this build does not recognise
+/// round-trips instead of being flattened to "unknown" on the way in.
+fn status_text(status: crate::billing::SubscriptionStatus) -> &'static str {
+    use crate::billing::SubscriptionStatus as S;
+    match status {
+        S::Active => "active",
+        S::Trialing => "trialing",
+        S::PastDue => "past_due",
+        S::Canceled => "canceled",
+        S::Unknown => "unknown",
+    }
 }

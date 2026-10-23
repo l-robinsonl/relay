@@ -231,6 +231,42 @@ pub trait SyncStore: Send + Sync + 'static {
     /// Signs every device out, by dropping all of a user's sessions.
     async fn delete_sessions_for_user(&self, user_id: &str) -> ServerResult<u64>;
 
+    // --- billing ---------------------------------------------------------
+
+    /// What a workspace is entitled to.
+    ///
+    /// No row means unmetered: a self-hosted server never writes one,
+    /// and on Cloud a workspace that predates billing should keep
+    /// working rather than silently losing its seats.
+    async fn entitlement(&self, workspace_id: &str) -> ServerResult<crate::billing::Entitlement>;
+
+    /// Records or updates a subscription.
+    async fn save_subscription(
+        &self,
+        subscription: &crate::billing::Subscription,
+    ) -> ServerResult<()>;
+
+    /// The subscription for a workspace, if it has one.
+    async fn subscription(
+        &self,
+        workspace_id: &str,
+    ) -> ServerResult<Option<crate::billing::Subscription>>;
+
+    /// Which workspace a Stripe customer belongs to.
+    ///
+    /// A webhook names the customer, not the workspace.
+    async fn workspace_for_customer(&self, customer_id: &str) -> ServerResult<Option<String>>;
+
+    /// Records that an event has been applied.
+    ///
+    /// Returns false when it had already been applied, which is the
+    /// caller's cue to skip: Stripe retries until acknowledged, so the
+    /// same event arrives more than once.
+    async fn claim_billing_event(&self, event_id: &str) -> ServerResult<bool>;
+
+    /// How many people are in a workspace, for the seat check.
+    async fn member_count(&self, workspace_id: &str) -> ServerResult<u32>;
+
     // --- invitations -----------------------------------------------------
 
     /// Invites an address to a workspace. Workspace administrators only.
