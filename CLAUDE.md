@@ -37,7 +37,7 @@ Phases 1–3 complete. Phase 4 mostly. Phase 5 part-done.
 | Invitations | workspace + role, bound to the invited address, admin-only, revocable; `invite` signup mode now works |
 | Members UI | invite, change a role, remove, withdraw an invitation — all from the Sync dialog |
 | Joining | an invitee pastes the link, picks a password, and lands in the workspace with its contents |
-| Assistant (in progress) | `relay-agent`: provider trait (Anthropic + OpenAI-compatible), tool registry with a risk model, the loop. No tools over the app yet, no UI, no MCP |
+| Assistant (in progress) | `relay-agent`: providers, risk-classified tool registry, the loop. `relay-app/src/assistant/`: nine tools over the workspace. No persistence, no UI, no MCP yet |
 | Packaging (server) | Dockerfile + compose, unprivileged, healthcheck; CI builds and smoke-tests the image |
 
 | Not built | |
@@ -154,6 +154,12 @@ Run it: `npm run tauri dev`, or the built binary at
   suggested and declined: a product arguing your data is on your disk
   cannot answer "where do my conversations live" with someone else's
   cloud.
+- **The assistant never sees a secret variable's value.** Same rule as
+  scripts, and more important: an agent can be steered by whatever a
+  web page said, so it is a weaker vessel than a script the user
+  wrote. `list_environments` reports names and the secret flag, never
+  values; `get_request` redacts credential-shaped headers. Both have
+  tests in `crates/relay-app/tests/assistant_tools.rs`.
 - **`ToolRisk` decides what gets confirmed.** `Send` and `Destructive`
   always ask. `Send` is its own level because a request Relay makes is
   indistinguishable at the far end from one the user made, and "list

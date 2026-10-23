@@ -14,6 +14,8 @@ relay-http.workspace = true
 relay-storage.workspace = true
 relay-script.workspace = true
 relay-sync.workspace = true
+relay-agent.workspace = true
+async-trait = "0.1"
 uuid.workspace = true
 rusqlite = { version = "0.39", features = ["bundled"] }
 reqwest = { version = "0.13", default-features = false, features = ["json", "query", "rustls"] }

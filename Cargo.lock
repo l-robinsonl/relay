@@ -3456,11 +3456,13 @@ dependencies = [
 name = "relay-app"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "axum",
  "base64 0.23.1",
  "dirs",
  "futures-util",
  "getrandom 0.3.4",
+ "relay-agent",
  "relay-core",
  "relay-http",
  "relay-models",

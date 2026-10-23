@@ -72,6 +72,10 @@ pub struct ResolvedPreview {
 }
 
 /// The application's shared state.
+///
+/// Cheap to clone: every field is either `Arc`-backed or a handle. The
+/// assistant's tools each hold one, and cloning beats threading a
+/// reference through a trait object with a lifetime.
 #[derive(Clone)]
 pub struct RelayService {
     db: Database,

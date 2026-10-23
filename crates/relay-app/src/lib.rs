@@ -8,6 +8,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod assistant;
 pub mod oauth;
 pub mod paths;
 pub mod secrets;
