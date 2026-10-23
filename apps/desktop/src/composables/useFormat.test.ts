@@ -58,8 +58,21 @@ describe('formatRelativeTime', () => {
     expect(formatRelativeTime(old)).not.toContain('ago')
   })
 
-  it('does not report a future timestamp as negative', () => {
+  it('treats a slightly future timestamp as clock skew', () => {
     expect(formatRelativeTime(Date.now() + 10_000)).toBe('just now')
+  })
+
+  it('describes a real future time as being ahead', () => {
+    // An invitation lapses after a week, and the members panel
+    // showed every one of them as "expires just now" — which reads
+    // as already gone.
+    const now = Date.now()
+    expect(formatRelativeTime(now + 30 * 60_000)).toBe('in 30 min')
+    expect(formatRelativeTime(now + 2 * 3_600_000)).toBe('in 2 hours')
+    expect(formatRelativeTime(now + 3_600_000)).toBe('in 1 hour')
+    expect(formatRelativeTime(now + 6 * 86_400_000)).toBe('in 6 days')
+    expect(formatRelativeTime(now + 86_400_000)).toBe('in 1 day')
+    expect(formatRelativeTime(now + 60 * 86_400_000)).toContain('on ')
   })
 })
 

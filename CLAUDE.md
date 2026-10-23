@@ -240,6 +240,21 @@ Run it: `npm run tauri dev`, or the built binary at
   that variant reports. In a real run "you need another seat" came
   back looking like a malformed request. Payment Required is the
   status this situation exists for.
+- **Generated types are never re-declared.** `ipc.ts` hand-wrote
+  Assertion, TestCase, ConsoleLine and ScriptOutcome, which ts-rs
+  already emits from Rust, and the copies had drifted — the
+  hand-written `ScriptOutcome` was missing `requestPatch`. CI could
+  not catch it: the drift check compares the generated files against
+  Rust, and a second copy somebody typed lives on the other side of
+  that. `packages/shared-types/src/index.ts` is written by
+  `scripts/write-bindings-index.mjs` as part of `npm run bindings`,
+  so every generated type is importable and nobody needs to keep a
+  list. Re-export, never redeclare.
+- **`formatRelativeTime` handles both directions.** It collapsed
+  every future time to "just now", so a pending invitation with a
+  week left read as "expires just now" — which looks like it has
+  already gone. Under a minute ahead is still "just now", because
+  that is clock skew.
 - **`Config` has a `Default` for fixtures only.** Four test fixtures
   in two crates spelled out every field, so each new setting broke
   them all. `from_env` stays an exhaustive struct literal — a new
@@ -341,11 +356,35 @@ Quote PSS. Never quote a figure this project did not measure.
 - Say plainly when something is still unseen. Much of this UI has never
   been looked at by me; only he can report on it.
 
+**There is a camera now.** `./scripts/shoot-ui.sh <feature/Component>
+[width] [height]` runs a component's `*.shot.test.ts`, renders the
+markup against the real built stylesheet at a realistic width, and
+photographs both themes. Cameras are skipped unless `RELAY_SHOTS=1`.
+Six panels have been through it: billing, the tool approval row, test
+results, members, MCP servers, assistant settings. Four real bugs came
+out of looking, none of which any test would have caught.
+
+Two things it cannot see, both already paid for:
+
+- **A `<select>` bound with `:value` always photographs as its first
+  option.** The value lives in a DOM property and `wrapper.html()`
+  serialises attributes. MembersPanel appeared to report every member
+  as a Viewer and is correct in a browser. Check
+  `(el as HTMLSelectElement).value` in a test before believing a
+  photograph. Same for scroll, focus, `:hover` and mid-animation.
+- **Every dialog here teleports to `body`**, so `wrapper.html()`
+  catches an empty shell. `src/features/shots.ts` has `rendered()`,
+  which picks up teleported content; mount with
+  `attachTo: document.body`. And pass a height, or `position:fixed`
+  states overlap each other.
+
 ## Next
 
-1. A look at the UI built blind. The members panel, scripts editor,
-   invited-join tab, chat panel, assistant settings, MCP settings and
-   now the seats panel have all been written without ever being seen.
+1. Finish looking at the UI built blind. Photographed and fixed:
+   billing, tool approval, test results, members, MCP servers,
+   assistant settings. Still unseen: the chat panel itself, the
+   conflict panel, the scripts editor, the invited-join tab and the
+   request/response editors.
 2. Deploy. The only things between here and a usable Relay Cloud are
    a host and a DNS name; `render.yaml` and `deploy/compose.prod.yml`
    are both ready and neither has been run in anger.

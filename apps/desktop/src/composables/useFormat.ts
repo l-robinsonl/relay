@@ -31,7 +31,26 @@ export function formatDuration (ms: number): string {
 /** A timestamp as a relative description, falling back to a date. */
 export function formatRelativeTime (millis: number): string {
   const delta = Date.now() - millis
-  if (delta < 0) return 'just now'
+
+  // Ahead of us. Everything here used to collapse to "just now",
+  // which was right for clock skew and wrong for anything genuinely
+  // in the future: a pending invitation with a week left read as
+  // "expires just now".
+  if (delta < 0) {
+    const ahead = -delta
+    if (ahead < 60_000) return 'just now'
+    if (ahead < 3_600_000) return `in ${Math.floor(ahead / 60_000)} min`
+    if (ahead < 86_400_000) {
+      const hours = Math.floor(ahead / 3_600_000)
+      return `in ${hours} hour${hours === 1 ? '' : 's'}`
+    }
+    if (ahead < 604_800_000) {
+      const days = Math.floor(ahead / 86_400_000)
+      return `in ${days} day${days === 1 ? '' : 's'}`
+    }
+    return `on ${new Date(millis).toLocaleDateString()}`
+  }
+
   if (delta < 60_000) return 'just now'
   if (delta < 3_600_000) {
     const minutes = Math.floor(delta / 60_000)

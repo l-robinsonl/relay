@@ -8,14 +8,31 @@
 # against the real built stylesheet at a realistic width, and takes a
 # picture in both themes.
 #
-#   ./scripts/shoot-ui.sh sync/BillingPanel [width]
+#   ./scripts/shoot-ui.sh sync/BillingPanel [width] [height]
+#
+# A component using `position:fixed` — every dialog here does, via
+# Teleport — fills its frame rather than the viewport, so give those a
+# height big enough to hold the dialog or the states overlap:
+#
+#   ./scripts/shoot-ui.sh assistant/AssistantSettings 560 760
 #
 # Needs `npm run build` to have produced dist/assets/*.css at least
 # once, and google-chrome on PATH.
+#
+# What it cannot see. The picture is serialised HTML, so anything
+# living in a DOM *property* rather than an attribute is missing from
+# it. The one that bites: a `<select>` bound with `:value` shows its
+# first option in every shot, however the real control behaves —
+# MembersPanel looked like it reported every member as a Viewer, and
+# in a browser it is correct. Check with
+# `(el as HTMLSelectElement).value` in a test before believing the
+# photograph. The same goes for scroll position, focus, :hover, and
+# anything a CSS animation is mid-way through.
 set -euo pipefail
 
 TARGET="${1:?usage: shoot-ui.sh <feature/Component> [panel-width]}"
 WIDTH="${2:-320}"
+HEIGHT="${3:-0}"
 NAME="$(basename "$TARGET")"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT="${RELAY_SHOTS_OUT:-/tmp/relay-shots}/$NAME"
@@ -33,10 +50,10 @@ cd "$ROOT"
 RELAY_SHOTS=1 RELAY_SHOTS_DIR="$OUT" \
   npx vitest run --root apps/desktop "src/features/${TARGET}.shot.test.ts" >/dev/null
 
-python3 - "$OUT" "$NAME" "$WIDTH" <<'PY'
+python3 - "$OUT" "$NAME" "$WIDTH" "$HEIGHT" <<'PY'
 import html, json, pathlib, sys
 
-out, name, width = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+out, name, width, height = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4]
 css = sorted(pathlib.Path("apps/desktop/dist/assets").glob("*.css"))[0].read_text()
 states = json.loads((out / "states.json").read_text())
 
@@ -52,7 +69,13 @@ for theme in ("dark", "light"):
 body{{margin:0;padding:24px;font-family:system-ui,sans-serif}}
 h2{{font:600 11px ui-monospace,monospace;letter-spacing:.04em;opacity:.55;margin:0 0 6px}}
 section{{margin-bottom:22px}}
-.frame{{width:{width}px;border:1px solid rgba(128,128,128,.35);border-radius:6px;padding:12px}}
+/* The transform matters: it makes each frame a containing block, so a
+   dialog using `position:fixed` lands inside its own frame instead of
+   every state stacking on the viewport and only the last being
+   visible. */
+.frame{{width:{width}px;border:1px solid rgba(128,128,128,.35);border-radius:6px;
+       padding:12px;transform:translateZ(0);position:relative;
+       min-height:{height or 60}px;overflow:hidden}}
 .wrap{{display:flex;flex-wrap:wrap;gap:28px;align-items:flex-start}}
 </style></head><body><div class="wrap">{panels}</div></body></html>""")
 
