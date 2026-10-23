@@ -12,12 +12,14 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+mod conversation_repo;
 mod db;
 mod error;
 pub mod migrations;
 mod repo;
 mod sync_repo;
 
+pub use conversation_repo::{Conversation, ConversationRepo, StoredMessage};
 pub use db::Database;
 pub use error::{StorageError, StorageResult};
 pub use repo::{

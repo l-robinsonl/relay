@@ -30,6 +30,11 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "sync_state",
         sql: include_str!("../migrations/0002_sync.sql"),
     },
+    Migration {
+        version: 3,
+        name: "assistant_conversations",
+        sql: include_str!("../migrations/0003_conversations.sql"),
+    },
 ];
 
 /// The schema version this build expects.

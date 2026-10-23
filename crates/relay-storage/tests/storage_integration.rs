@@ -568,3 +568,195 @@ fn workspaces_are_isolated_from_each_other() {
     assert!(db.with(|c| RequestRepo::list(c, &b.id)).unwrap().is_empty());
     assert!(db.with(|c| TreeRepo::tree(c, &b.id)).unwrap().is_empty());
 }
+
+// --- assistant conversations ----------------------------------------------
+
+use relay_storage::ConversationRepo;
+
+#[test]
+fn a_conversation_keeps_its_messages_in_order() {
+    // Order is by position, not timestamp: a tool loop writes several
+    // messages inside the same millisecond, and replaying them out of
+    // order gives the model a conversation that makes no sense.
+    let db = db();
+    let workspace = seeded_workspace(&db).id;
+
+    db.with(|conn| ConversationRepo::create(conn, "c1", &workspace, "Chasing a 500"))
+        .unwrap();
+
+    db.with(|conn| {
+        ConversationRepo::append(
+            conn,
+            "c1",
+            &[
+                (
+                    "user".into(),
+                    "why is this failing".into(),
+                    serde_json::json!([]),
+                    serde_json::json!([]),
+                ),
+                (
+                    "assistant".into(),
+                    String::new(),
+                    serde_json::json!([{"id":"t1"}]),
+                    serde_json::json!([]),
+                ),
+                (
+                    "user".into(),
+                    String::new(),
+                    serde_json::json!([]),
+                    serde_json::json!([{"callId":"t1"}]),
+                ),
+                (
+                    "assistant".into(),
+                    "the host is wrong".into(),
+                    serde_json::json!([]),
+                    serde_json::json!([]),
+                ),
+            ],
+        )
+    })
+    .unwrap();
+
+    let messages = db
+        .with(|conn| ConversationRepo::messages(conn, "c1"))
+        .unwrap();
+
+    assert_eq!(messages.len(), 4);
+    assert_eq!(
+        messages.iter().map(|m| m.position).collect::<Vec<_>>(),
+        vec![0, 1, 2, 3]
+    );
+    assert_eq!(messages[3].body, "the host is wrong");
+    assert_eq!(messages[1].tool_calls[0]["id"], "t1");
+}
+
+#[test]
+fn appending_twice_continues_the_numbering() {
+    let db = db();
+    let workspace = seeded_workspace(&db).id;
+    db.with(|conn| ConversationRepo::create(conn, "c1", &workspace, "Two turns"))
+        .unwrap();
+
+    for text in ["first", "second"] {
+        db.with(|conn| {
+            ConversationRepo::append(
+                conn,
+                "c1",
+                &[(
+                    "user".into(),
+                    text.into(),
+                    serde_json::json!([]),
+                    serde_json::json!([]),
+                )],
+            )
+        })
+        .unwrap();
+    }
+
+    let messages = db
+        .with(|conn| ConversationRepo::messages(conn, "c1"))
+        .unwrap();
+    assert_eq!(
+        messages.iter().map(|m| m.position).collect::<Vec<_>>(),
+        vec![0, 1]
+    );
+}
+
+#[test]
+fn the_list_is_ordered_by_when_each_was_last_touched() {
+    let db = db();
+    let workspace = seeded_workspace(&db).id;
+
+    db.with(|conn| {
+        ConversationRepo::create(conn, "older", &workspace, "Older")?;
+        ConversationRepo::create(conn, "newer", &workspace, "Newer")
+    })
+    .unwrap();
+
+    // Touching the older one puts it back on top, which is what makes
+    // the list useful rather than a creation log.
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    db.with(|conn| {
+        ConversationRepo::append(
+            conn,
+            "older",
+            &[(
+                "user".into(),
+                "still here".into(),
+                serde_json::json!([]),
+                serde_json::json!([]),
+            )],
+        )
+    })
+    .unwrap();
+
+    let listed = db
+        .with(|conn| ConversationRepo::list(conn, &workspace, 10))
+        .unwrap();
+    assert_eq!(listed[0].id, "older", "{listed:?}");
+}
+
+#[test]
+fn deleting_a_conversation_takes_its_messages_with_it() {
+    let db = db();
+    let workspace = seeded_workspace(&db).id;
+
+    db.with(|conn| ConversationRepo::create(conn, "c1", &workspace, "Doomed"))
+        .unwrap();
+    db.with(|conn| {
+        ConversationRepo::append(
+            conn,
+            "c1",
+            &[(
+                "user".into(),
+                "hello".into(),
+                serde_json::json!([]),
+                serde_json::json!([]),
+            )],
+        )
+    })
+    .unwrap();
+
+    db.with(|conn| ConversationRepo::delete(conn, "c1"))
+        .unwrap();
+
+    assert!(
+        db.with(|conn| ConversationRepo::messages(conn, "c1"))
+            .unwrap()
+            .is_empty()
+    );
+    let workspace2 = workspace.clone();
+    assert!(
+        db.with(move |conn| ConversationRepo::list(conn, &workspace2, 10))
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn a_mangled_tool_call_column_does_not_lose_the_message() {
+    // Losing a whole conversation because one column was corrupted is
+    // a worse outcome than losing the calls from one turn.
+    let db = db();
+    let workspace = seeded_workspace(&db).id;
+
+    db.with(|conn| {
+        ConversationRepo::create(conn, "c1", &workspace, "Corrupt")?;
+        conn.execute(
+            "INSERT INTO conversation_messages
+                (id, conversation_id, role, body, tool_calls, tool_results, position, created_at)
+             VALUES ('m1', 'c1', 'assistant', 'still readable', 'not json', '[]', 0, 1)",
+            [],
+        )?;
+        Ok(())
+    })
+    .unwrap();
+
+    let messages = db
+        .with(|conn| ConversationRepo::messages(conn, "c1"))
+        .unwrap();
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].body, "still readable");
+    assert_eq!(messages[0].tool_calls, serde_json::json!([]));
+}
