@@ -102,6 +102,29 @@ async function buySeats () {
   }
 }
 
+/** The one button, and what it does. */
+const action = computed(() => {
+  const current = billing.value
+  if (!current) return null
+
+  // The portal manages a *live* subscription. A cancelled one has
+  // nothing there to manage, so starting again is a fresh checkout.
+  if (current.hasSubscription && current.active) {
+    return {
+      // Matching the warning above it: being told buying more seats
+      // clears the problem, under a button saying "Manage billing",
+      // leaves you guessing which screen does that.
+      label: needsMoreSeats.value ? 'Add seats' : 'Manage billing',
+      run: manage,
+    }
+  }
+
+  return {
+    label: current.members === 1 ? 'Buy a seat' : `Buy ${current.members} seats`,
+    run: buySeats,
+  }
+})
+
 async function manage () {
   working.value = true
   error.value = null
@@ -143,11 +166,11 @@ async function manage () {
         type="button"
         class="btn btn-primary flex-1 gap-1.5 text-xs"
         :disabled="working"
-        @click="billing.hasSubscription ? manage() : buySeats()"
+        @click="action?.run()"
       >
         <Loader2 v-if="working" :size="13" class="animate-spin" />
         <CreditCard v-else :size="13" />
-        {{ billing.hasSubscription ? 'Manage billing' : `Buy ${billing.members === 1 ? 'a seat' : `${billing.members} seats`}` }}
+        {{ action?.label }}
       </button>
       <button type="button" class="btn text-xs" :disabled="loading" @click="load">
         Refresh
@@ -170,7 +193,12 @@ async function manage () {
       </a>
     </p>
 
-    <p class="text-xs text-muted">
+    <!-- Only before the first payment. That is when someone wonders
+         whether to trust a desktop app with a card; afterwards they
+         know, and in a 320px panel it is two lines of permanent
+         boilerplate — including, until now, under "you are not an
+         administrator", where there is nothing to pay with. -->
+    <p v-if="billing.canManage && !billing.hasSubscription" class="text-xs text-muted">
       Payment is handled by Stripe, in your browser. Relay never sees a card number.
     </p>
 

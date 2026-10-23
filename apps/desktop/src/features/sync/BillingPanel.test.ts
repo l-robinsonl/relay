@@ -110,6 +110,55 @@ describe('BillingPanel', () => {
     expect(link.attributes('href')).toBe('https://billing.stripe.com/p/session/y')
   })
 
+  it('offers a fresh checkout once a subscription has been cancelled', async () => {
+    // The customer portal manages a live subscription. A cancelled
+    // one has nothing there to manage, so sending someone to it to
+    // resubscribe is sending them to an empty page.
+    mocked.syncBilling.mockResolvedValue(
+      view({ active: false, hasSubscription: true, members: 2, notice: 'It ended.' }),
+    )
+    const wrapper = await panel()
+
+    const button = wrapper.findAll('button').find((b) => b.text().includes('Buy'))
+    expect(button?.text()).toContain('Buy 2 seats')
+
+    await button!.trigger('click')
+    await flushPromises()
+    expect(mocked.syncBillingCheckout).toHaveBeenCalled()
+    expect(mocked.syncBillingPortal).not.toHaveBeenCalled()
+  })
+
+  it('names the action the warning just asked for', async () => {
+    // Being told that buying the difference clears it, under a button
+    // marked "Manage billing", leaves you guessing which screen does
+    // that.
+    mocked.syncBilling.mockResolvedValue(view({ members: 7, seats: 5 }))
+    const wrapper = await panel()
+
+    expect(wrapper.text()).toContain('Add seats')
+    expect(wrapper.text()).not.toContain('Manage billing')
+  })
+
+  it('explains how payment works only before the first payment', async () => {
+    // That is when someone wonders whether to trust a desktop app
+    // with a card. Afterwards they know, and in a 320px panel it is
+    // two lines of permanent boilerplate.
+    mocked.syncBilling.mockResolvedValue(view({ hasSubscription: false, seats: null }))
+    const before = await panel()
+    expect(before.text()).toContain('Relay never sees a card number')
+
+    mocked.syncBilling.mockResolvedValue(view({ hasSubscription: true }))
+    const after = await panel()
+    expect(after.text()).not.toContain('Relay never sees a card number')
+  })
+
+  it('does not explain payment to someone who cannot pay', async () => {
+    mocked.syncBilling.mockResolvedValue(view({ canManage: false, hasSubscription: false }))
+    const wrapper = await panel()
+
+    expect(wrapper.text()).not.toContain('Relay never sees a card number')
+  })
+
   it('does not offer the buttons to someone who cannot use them', async () => {
     mocked.syncBilling.mockResolvedValue(view({ canManage: false }))
     const wrapper = await panel()
