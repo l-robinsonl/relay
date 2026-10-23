@@ -38,17 +38,11 @@ async fn start_server() -> Server {
     let addr = listener.local_addr().unwrap();
 
     let config = Config {
-        database_url: "sqlite::memory:".into(),
         bind: addr,
         public_url: String::new(),
         signup_mode: SignupMode::Open,
         session_ttl: std::time::Duration::from_secs(3600),
-        admin_email: None,
-        admin_password: None,
-        max_body_bytes: relay_sync::MAX_BATCH_BYTES + 65536,
-        resend_api_key: None,
-        mail_from: None,
-        require_verified_email: false,
+        ..Config::default()
     };
 
     let mail = Arc::new(relay_server::mail::CapturingMailer::new());

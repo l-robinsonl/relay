@@ -122,20 +122,13 @@ async fn start(signup: SignupMode) -> TestServer {
     store.migrate().await.unwrap();
 
     let config = Config {
-        database_url: "sqlite::memory:".into(),
-        bind: "127.0.0.1:0".parse().unwrap(),
         // Never empty in production — `Config::from_env` falls back to
         // the bind address — so a fixture that left it blank produced
         // relative links no test would notice were wrong.
         public_url: "https://relay.test".into(),
         signup_mode: signup,
         session_ttl: std::time::Duration::from_secs(3600),
-        admin_email: None,
-        admin_password: None,
-        max_body_bytes: relay_sync::MAX_BATCH_BYTES + 65536,
-        resend_api_key: None,
-        mail_from: None,
-        require_verified_email: false,
+        ..Config::default()
     };
 
     start_with(store, config).await
@@ -147,17 +140,11 @@ async fn start_requiring_verification() -> TestServer {
     store.migrate().await.unwrap();
 
     let config = Config {
-        database_url: "sqlite::memory:".into(),
-        bind: "127.0.0.1:0".parse().unwrap(),
         public_url: "https://relay.test".into(),
         signup_mode: SignupMode::Open,
         session_ttl: std::time::Duration::from_secs(3600),
-        admin_email: None,
-        admin_password: None,
-        max_body_bytes: relay_sync::MAX_BATCH_BYTES + 65536,
-        resend_api_key: None,
-        mail_from: None,
         require_verified_email: true,
+        ..Config::default()
     };
 
     start_with(store, config).await
@@ -1358,6 +1345,10 @@ async fn start_invite_only() -> TestServer {
         resend_api_key: None,
         mail_from: None,
         require_verified_email: false,
+        stripe_secret_key: None,
+        stripe_webhook_secret: None,
+        stripe_price_id: None,
+        stripe_return_url: None,
     };
 
     start_with(store, config).await
@@ -1677,4 +1668,537 @@ async fn a_non_member_cannot_list_who_has_been_invited() {
         .await;
 
     assert_eq!(response.status(), 404);
+}
+
+// --- billing ---------------------------------------------------------------
+
+/// A stand-in for Stripe, so the checkout and portal routes can be
+/// driven end to end. It records what it was sent: the point of these
+/// tests is as much *what Relay asks Stripe for* — the seat count, the
+/// workspace id in the metadata — as what it does with the answer.
+struct StubStripe {
+    base: String,
+    calls: Arc<std::sync::Mutex<Vec<(String, String)>>>,
+    handle: tokio::task::JoinHandle<()>,
+}
+
+impl Drop for StubStripe {
+    fn drop(&mut self) {
+        self.handle.abort();
+    }
+}
+
+impl StubStripe {
+    async fn start() -> Self {
+        let calls: Arc<std::sync::Mutex<Vec<(String, String)>>> = Arc::default();
+        let recorder = calls.clone();
+
+        let app = axum::Router::new().fallback(axum::routing::any(
+            move |uri: axum::http::Uri, body: String| {
+                let recorder = recorder.clone();
+                async move {
+                    recorder
+                        .lock()
+                        .unwrap()
+                        .push((uri.path().to_string(), body));
+                    axum::Json(json!({ "id": "cs_test_1", "url": "https://stripe.test/pay" }))
+                }
+            },
+        ));
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handle = tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+
+        Self {
+            base: format!("http://{addr}"),
+            calls,
+            handle,
+        }
+    }
+
+    /// The body of the one call made to `path`.
+    fn body(&self, path: &str) -> String {
+        let calls = self.calls.lock().unwrap();
+        let matching: Vec<_> = calls.iter().filter(|(p, _)| p == path).collect();
+        assert_eq!(
+            matching.len(),
+            1,
+            "expected one call to {path}, got {calls:?}"
+        );
+        matching[0].1.clone()
+    }
+
+    fn was_called(&self) -> bool {
+        !self.calls.lock().unwrap().is_empty()
+    }
+}
+
+const WEBHOOK_SECRET: &str = "whsec_test_http";
+
+/// Signs a body the way Stripe signs a webhook.
+fn stripe_signature(body: &str, timestamp: i64) -> String {
+    use hmac::{Hmac, KeyInit, Mac};
+    let mut mac = <Hmac<sha2::Sha256>>::new_from_slice(WEBHOOK_SECRET.as_bytes()).unwrap();
+    mac.update(format!("{timestamp}.{body}").as_bytes());
+    let hex: String = mac
+        .finalize()
+        .into_bytes()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    format!("t={timestamp},v1={hex}")
+}
+
+fn now_seconds() -> i64 {
+    relay_models::Timestamp::now().as_millis() / 1000
+}
+
+/// Starts a server that charges, with Stripe pointed at the stub.
+async fn start_billing(stub: &StubStripe) -> TestServer {
+    let store = SqliteStore::connect("sqlite::memory:").await.unwrap();
+    store.migrate().await.unwrap();
+
+    let config = Config {
+        public_url: "https://relay.test".into(),
+        signup_mode: SignupMode::Open,
+        session_ttl: std::time::Duration::from_secs(3600),
+        stripe_secret_key: Some("sk_test_whatever".into()),
+        stripe_webhook_secret: Some(WEBHOOK_SECRET.into()),
+        stripe_price_id: Some("price_seat".into()),
+        ..Config::default()
+    };
+
+    let mail = Arc::new(relay_server::mail::CapturingMailer::new());
+    let store: Arc<dyn SyncStore> = Arc::new(store);
+    let mut state = AppState::with_mailer(store.clone(), config, mail.clone());
+    state.stripe = Some(Arc::new(
+        relay_server::billing::stripe::Stripe::new("sk_test_whatever", "price_seat")
+            .unwrap()
+            .with_base_url(&stub.base),
+    ));
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let handle = tokio::spawn(async move {
+        let _ = axum::serve(listener, relay_server::router(state)).await;
+    });
+
+    TestServer {
+        base: format!("http://{addr}"),
+        client: reqwest::Client::new(),
+        handle,
+        mail,
+        store,
+    }
+}
+
+/// Posts a webhook body with a valid signature.
+async fn send_webhook(server: &TestServer, body: Value) -> reqwest::Response {
+    let raw = body.to_string();
+    let signature = stripe_signature(&raw, now_seconds());
+    server
+        .client
+        .post(server.url("/v1/billing/webhook"))
+        .header("stripe-signature", signature)
+        .header("content-type", "application/json")
+        .body(raw)
+        .send()
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn a_self_hosted_server_charges_for_nothing() {
+    // The whole product promise: run it yourself and no seat is
+    // counted against you. `metered` false is what the UI hangs the
+    // entire billing panel on.
+    let server = start(SignupMode::Open).await;
+    let token = owner_with_workspace(&server).await;
+
+    let response = server.get_auth("/v1/workspaces/w1/billing", &token).await;
+    assert_eq!(response.status(), 200);
+
+    let body: Value = response.json().await.unwrap();
+    assert_eq!(body["metered"], false);
+    assert_eq!(body["active"], true);
+    assert_eq!(body["members"], 1);
+    assert_eq!(body["hasSubscription"], false);
+    assert!(body.get("seats").is_none(), "unmetered means no seat limit");
+}
+
+#[tokio::test]
+async fn billing_tells_a_stranger_nothing_about_a_workspace() {
+    let server = start(SignupMode::Open).await;
+    owner_with_workspace(&server).await;
+    let outsider = server.sign_up("mallory@example.com").await;
+
+    // 404, not 403: the same rule as everywhere else here — 403 would
+    // confirm the id exists.
+    let response = server
+        .get_auth("/v1/workspaces/w1/billing", &outsider)
+        .await;
+    assert_eq!(response.status(), 404);
+}
+
+#[tokio::test]
+async fn a_server_that_does_not_charge_refuses_to_start_a_checkout() {
+    let server = start(SignupMode::Open).await;
+    let token = owner_with_workspace(&server).await;
+
+    let response = server
+        .post_auth("/v1/workspaces/w1/billing/checkout", &token, json!({}))
+        .await;
+    assert_eq!(response.status(), 400);
+}
+
+#[tokio::test]
+async fn a_checkout_buys_a_seat_for_every_member() {
+    // Asking for fewer seats than there are people would take payment
+    // for a workspace that then refuses to let them in.
+    let stub = StubStripe::start().await;
+    let server = start_billing(&stub).await;
+    let ada = owner_with_workspace(&server).await;
+    let bob = server.sign_up("bob@example.com").await;
+
+    let bob_id = server
+        .get_auth("/v1/auth/me", &bob)
+        .await
+        .json::<Value>()
+        .await
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    server
+        .client
+        .put(server.url(&format!("/v1/workspaces/w1/members/{bob_id}")))
+        .bearer_auth(&ada)
+        .json(&json!({ "role": "editor" }))
+        .send()
+        .await
+        .unwrap();
+
+    let response = server
+        .post_auth(
+            "/v1/workspaces/w1/billing/checkout",
+            &ada,
+            json!({ "seats": 1 }),
+        )
+        .await;
+    assert_eq!(response.status(), 200);
+    assert_eq!(
+        response.json::<Value>().await.unwrap()["url"],
+        "https://stripe.test/pay"
+    );
+
+    let form = stub.body("/v1/checkout/sessions");
+    assert!(
+        form.contains("quantity%5D=2") || form.contains("quantity]=2"),
+        "one seat was asked for but there are two members: {form}"
+    );
+    // Both places, because only one of them comes back on each event.
+    assert!(form.contains("client_reference_id=w1"), "{form}");
+    assert!(form.contains("workspace_id%5D=w1"), "{form}");
+}
+
+#[tokio::test]
+async fn only_an_administrator_commits_the_workspace_to_a_bill() {
+    let stub = StubStripe::start().await;
+    let server = start_billing(&stub).await;
+    let ada = owner_with_workspace(&server).await;
+    let bob = server.sign_up("bob@example.com").await;
+
+    let bob_id = server
+        .get_auth("/v1/auth/me", &bob)
+        .await
+        .json::<Value>()
+        .await
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    server
+        .client
+        .put(server.url(&format!("/v1/workspaces/w1/members/{bob_id}")))
+        .bearer_auth(&ada)
+        .json(&json!({ "role": "editor" }))
+        .send()
+        .await
+        .unwrap();
+
+    let response = server
+        .post_auth("/v1/workspaces/w1/billing/checkout", &bob, json!({}))
+        .await;
+    assert_eq!(response.status(), 404);
+    assert!(
+        !stub.was_called(),
+        "Stripe was reached before the role check"
+    );
+}
+
+#[tokio::test]
+async fn the_portal_needs_a_subscription_to_open() {
+    let stub = StubStripe::start().await;
+    let server = start_billing(&stub).await;
+    let token = owner_with_workspace(&server).await;
+
+    let response = server
+        .post_auth("/v1/workspaces/w1/billing/portal", &token, json!({}))
+        .await;
+    assert_eq!(response.status(), 400);
+    assert!(!stub.was_called());
+}
+
+#[tokio::test]
+async fn a_forged_webhook_buys_nothing() {
+    // The reason the signature check exists. The endpoint is public,
+    // so without it anyone could POST themselves a thousand seats.
+    let stub = StubStripe::start().await;
+    let server = start_billing(&stub).await;
+    let token = owner_with_workspace(&server).await;
+
+    let body = json!({
+        "id": "evt_forged",
+        "type": "customer.subscription.updated",
+        "data": { "object": {
+            "id": "sub_1",
+            "customer": "cus_1",
+            "status": "active",
+            "metadata": { "workspace_id": "w1" },
+            "items": { "data": [{ "quantity": 1000 }] }
+        }}
+    })
+    .to_string();
+
+    let response = server
+        .client
+        .post(server.url("/v1/billing/webhook"))
+        .header("stripe-signature", "t=1,v1=deadbeef")
+        .header("content-type", "application/json")
+        .body(body)
+        .send()
+        .await
+        .unwrap();
+    assert!(!response.status().is_success());
+
+    let billing: Value = server
+        .get_auth("/v1/workspaces/w1/billing", &token)
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(billing["hasSubscription"], false);
+    assert!(billing.get("seats").is_none());
+}
+
+#[tokio::test]
+async fn a_webhook_signed_hours_ago_is_refused() {
+    // Replay. A signature captured once would otherwise work for ever.
+    let stub = StubStripe::start().await;
+    let server = start_billing(&stub).await;
+    owner_with_workspace(&server).await;
+
+    let raw = json!({ "id": "evt_old", "type": "customer.subscription.deleted",
+                      "data": { "object": { "metadata": { "workspace_id": "w1" } } } })
+    .to_string();
+    let signature = stripe_signature(&raw, now_seconds() - 7200);
+
+    let response = server
+        .client
+        .post(server.url("/v1/billing/webhook"))
+        .header("stripe-signature", signature)
+        .header("content-type", "application/json")
+        .body(raw)
+        .send()
+        .await
+        .unwrap();
+    assert!(!response.status().is_success());
+}
+
+#[tokio::test]
+async fn a_genuine_webhook_puts_the_workspace_in_good_standing() {
+    let stub = StubStripe::start().await;
+    let server = start_billing(&stub).await;
+    let token = owner_with_workspace(&server).await;
+
+    let response = send_webhook(
+        &server,
+        json!({
+            "id": "evt_1",
+            "type": "customer.subscription.updated",
+            "data": { "object": {
+                "id": "sub_1",
+                "customer": "cus_1",
+                "status": "active",
+                "current_period_end": 1_800_000_000i64,
+                "metadata": { "workspace_id": "w1" },
+                "items": { "data": [{ "quantity": 5 }] }
+            }}
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), 204);
+
+    let billing: Value = server
+        .get_auth("/v1/workspaces/w1/billing", &token)
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(billing["metered"], true);
+    assert_eq!(billing["active"], true);
+    assert_eq!(billing["seats"], 5);
+    assert_eq!(billing["hasSubscription"], true);
+}
+
+#[tokio::test]
+async fn the_same_event_twice_is_applied_once() {
+    // Stripe retries until it gets a 2xx, so every event arrives more
+    // than once. The guard is on the event id, so a second body
+    // wearing the same id must change nothing.
+    let stub = StubStripe::start().await;
+    let server = start_billing(&stub).await;
+    let token = owner_with_workspace(&server).await;
+
+    let event = |seats: u64| {
+        json!({
+            "id": "evt_same",
+            "type": "customer.subscription.updated",
+            "data": { "object": {
+                "id": "sub_1", "customer": "cus_1", "status": "active",
+                "metadata": { "workspace_id": "w1" },
+                "items": { "data": [{ "quantity": seats }] }
+            }}
+        })
+    };
+
+    assert_eq!(send_webhook(&server, event(5)).await.status(), 204);
+    assert_eq!(send_webhook(&server, event(500)).await.status(), 204);
+
+    let billing: Value = server
+        .get_auth("/v1/workspaces/w1/billing", &token)
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(billing["seats"], 5, "the replay was applied");
+}
+
+#[tokio::test]
+async fn an_event_naming_no_workspace_is_acknowledged_anyway() {
+    // Anything but a 2xx and Stripe retries it for days.
+    let stub = StubStripe::start().await;
+    let server = start_billing(&stub).await;
+    owner_with_workspace(&server).await;
+
+    let response = send_webhook(
+        &server,
+        json!({
+            "id": "evt_orphan",
+            "type": "customer.subscription.updated",
+            "data": { "object": { "id": "sub_9", "customer": "cus_9", "status": "active" } }
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), 204);
+}
+
+#[tokio::test]
+async fn an_event_type_this_build_ignores_is_acknowledged() {
+    let stub = StubStripe::start().await;
+    let server = start_billing(&stub).await;
+    owner_with_workspace(&server).await;
+
+    let response = send_webhook(
+        &server,
+        json!({
+            "id": "evt_invoice",
+            "type": "invoice.payment_succeeded",
+            "data": { "object": { "customer": "cus_1" } }
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), 204);
+}
+
+#[tokio::test]
+async fn a_later_event_finds_the_workspace_through_the_customer() {
+    // Only the checkout carries the workspace in client_reference_id.
+    // Later events name a customer, and the subscription metadata is
+    // the bridge — but when that is missing too, the customer already
+    // on file has to be enough or a cancellation would never land.
+    let stub = StubStripe::start().await;
+    let server = start_billing(&stub).await;
+    let token = owner_with_workspace(&server).await;
+
+    send_webhook(
+        &server,
+        json!({
+            "id": "evt_checkout",
+            "type": "checkout.session.completed",
+            "data": { "object": {
+                "customer": "cus_7", "subscription": "sub_7",
+                "client_reference_id": "w1"
+            }}
+        }),
+    )
+    .await;
+
+    let response = send_webhook(
+        &server,
+        json!({
+            "id": "evt_gone",
+            "type": "customer.subscription.deleted",
+            "data": { "object": { "id": "sub_7", "customer": "cus_7", "status": "canceled" } }
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), 204);
+
+    let billing: Value = server
+        .get_auth("/v1/workspaces/w1/billing", &token)
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(billing["active"], false);
+    assert!(
+        billing["notice"].is_string(),
+        "a cancelled workspace must say why it is blocked"
+    );
+}
+
+#[tokio::test]
+async fn the_portal_opens_once_there_is_a_subscription() {
+    let stub = StubStripe::start().await;
+    let server = start_billing(&stub).await;
+    let token = owner_with_workspace(&server).await;
+
+    send_webhook(
+        &server,
+        json!({
+            "id": "evt_ck",
+            "type": "checkout.session.completed",
+            "data": { "object": {
+                "customer": "cus_42", "subscription": "sub_42",
+                "client_reference_id": "w1"
+            }}
+        }),
+    )
+    .await;
+
+    let response = server
+        .post_auth("/v1/workspaces/w1/billing/portal", &token, json!({}))
+        .await;
+    assert_eq!(response.status(), 200);
+    assert_eq!(
+        response.json::<Value>().await.unwrap()["url"],
+        "https://stripe.test/pay"
+    );
+
+    let form = stub.body("/v1/billing_portal/sessions");
+    assert!(form.contains("customer=cus_42"), "{form}");
 }

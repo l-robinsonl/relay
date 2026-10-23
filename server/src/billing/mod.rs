@@ -11,6 +11,7 @@
 //! reading or writing the workspace they already have. The only thing
 //! an entitlement gates is *growth*: adding another seat.
 
+pub mod stripe;
 pub mod webhook;
 
 use serde::{Deserialize, Serialize};

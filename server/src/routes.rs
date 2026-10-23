@@ -560,3 +560,238 @@ async fn handle_socket(mut socket: WebSocket, state: AppState, workspace_id: Str
 
     state.hub.prune();
 }
+
+// --- billing ---------------------------------------------------------------
+
+/// What a workspace is entitled to, as the client sees it.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BillingView {
+    /// Whether this deployment charges at all. False when self-hosted.
+    pub metered: bool,
+    /// Seats paid for, when there is a limit.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seats: Option<u32>,
+    /// How many of them are taken.
+    pub members: u32,
+    /// Whether the subscription is in good standing.
+    pub active: bool,
+    /// Anything the person should be told.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notice: Option<String>,
+    /// Whether there is a Stripe customer to open a portal for.
+    pub has_subscription: bool,
+}
+
+/// `GET /v1/workspaces/{id}/billing`
+pub async fn billing_status(
+    State(state): State<AppState>,
+    Path(workspace_id): Path<String>,
+    user: AuthenticatedUser,
+) -> ServerResult<Json<BillingView>> {
+    // Membership is the authorisation: the seat count is not secret
+    // from the people occupying the seats.
+    state
+        .store
+        .membership(&workspace_id, &user.0.id)
+        .await?
+        .ok_or(ServerError::Forbidden)?;
+
+    let entitlement = state.store.entitlement(&workspace_id).await?;
+    let subscription = state.store.subscription(&workspace_id).await?;
+
+    Ok(Json(BillingView {
+        metered: state.config.bills(),
+        seats: entitlement.seats,
+        members: state.store.member_count(&workspace_id).await?,
+        active: entitlement.active,
+        notice: entitlement.notice,
+        has_subscription: subscription.is_some(),
+    }))
+}
+
+/// How many seats to buy.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CheckoutRequest {
+    /// Seats. Defaults to the current member count.
+    #[serde(default)]
+    pub seats: Option<u32>,
+}
+
+/// Where to send the browser.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RedirectView {
+    /// The URL to open.
+    pub url: String,
+}
+
+/// `POST /v1/workspaces/{id}/billing/checkout`
+pub async fn billing_checkout(
+    State(state): State<AppState>,
+    Path(workspace_id): Path<String>,
+    user: AuthenticatedUser,
+    Json(body): Json<CheckoutRequest>,
+) -> ServerResult<Json<RedirectView>> {
+    let stripe = state
+        .stripe
+        .as_ref()
+        .ok_or_else(|| ServerError::BadRequest("this server does not charge for seats".into()))?;
+
+    // Only an administrator commits the workspace to a bill.
+    let membership = state
+        .store
+        .membership(&workspace_id, &user.0.id)
+        .await?
+        .ok_or(ServerError::Forbidden)?;
+    if membership.role != Role::Admin {
+        return Err(ServerError::Forbidden);
+    }
+
+    let members = state.store.member_count(&workspace_id).await?;
+    let seats = body.seats.unwrap_or(members).max(members).max(1);
+    let base = state.config.public_url.trim_end_matches('/');
+
+    let url = stripe
+        .checkout_session(
+            &workspace_id,
+            seats,
+            &user.0.email,
+            &format!("{base}/billing/done"),
+            &format!("{base}/billing/cancelled"),
+            // Keyed on the workspace and the seat count, so a
+            // double-click returns the same session instead of
+            // starting a second subscription.
+            &format!("checkout:{workspace_id}:{seats}"),
+        )
+        .await?;
+
+    Ok(Json(RedirectView { url }))
+}
+
+/// `POST /v1/workspaces/{id}/billing/portal`
+pub async fn billing_portal(
+    State(state): State<AppState>,
+    Path(workspace_id): Path<String>,
+    user: AuthenticatedUser,
+) -> ServerResult<Json<RedirectView>> {
+    let stripe = state
+        .stripe
+        .as_ref()
+        .ok_or_else(|| ServerError::BadRequest("this server does not charge for seats".into()))?;
+
+    let membership = state
+        .store
+        .membership(&workspace_id, &user.0.id)
+        .await?
+        .ok_or(ServerError::Forbidden)?;
+    if membership.role != Role::Admin {
+        return Err(ServerError::Forbidden);
+    }
+
+    let subscription = state
+        .store
+        .subscription(&workspace_id)
+        .await?
+        .ok_or_else(|| ServerError::BadRequest("this workspace has no subscription".into()))?;
+
+    let base = state.config.public_url.trim_end_matches('/');
+    let return_url = state
+        .config
+        .stripe_return_url
+        .clone()
+        .unwrap_or_else(|| format!("{base}/billing/done"));
+
+    let url = stripe
+        .portal_session(&subscription.customer_id, &return_url)
+        .await?;
+
+    Ok(Json(RedirectView { url }))
+}
+
+/// `POST /v1/billing/webhook`
+///
+/// Unauthenticated, because Stripe has no account here. The signature
+/// is the authentication, and nothing is read out of the body until it
+/// has been checked.
+pub async fn billing_webhook(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: String,
+) -> ServerResult<StatusCode> {
+    let secret = state
+        .config
+        .stripe_webhook_secret
+        .as_deref()
+        .ok_or_else(|| ServerError::BadRequest("this server does not take webhooks".into()))?;
+
+    let signature = headers
+        .get("stripe-signature")
+        .and_then(|v| v.to_str().ok())
+        .ok_or_else(|| ServerError::BadRequest("no Stripe signature".into()))?;
+
+    let now = Timestamp::now().as_millis() / 1000;
+    let verified = crate::billing::webhook::verify(&body, signature, secret, now)?;
+
+    let event = crate::billing::stripe::read_event(verified)?;
+
+    // Stripe retries until acknowledged, so the same event arrives
+    // more than once. Claiming it first makes a replay a no-op.
+    if !event.event_id.is_empty() && !state.store.claim_billing_event(&event.event_id).await? {
+        tracing::debug!(event = %event.event_id, "already applied");
+        return Ok(StatusCode::NO_CONTENT);
+    }
+
+    let Some(status) = event.status else {
+        // An event type this build does not act on. Acknowledged, or
+        // Stripe retries it for days.
+        return Ok(StatusCode::NO_CONTENT);
+    };
+
+    // A subscription event names a customer; the workspace comes from
+    // metadata, or from whichever workspace that customer already has.
+    let workspace_id = match &event.workspace_id {
+        Some(id) => Some(id.clone()),
+        None => match &event.customer_id {
+            Some(customer) => state.store.workspace_for_customer(customer).await?,
+            None => None,
+        },
+    };
+
+    let Some(workspace_id) = workspace_id else {
+        tracing::warn!(event = %event.event_id, "a billing event named no workspace");
+        return Ok(StatusCode::NO_CONTENT);
+    };
+
+    let existing = state.store.subscription(&workspace_id).await?;
+
+    state
+        .store
+        .save_subscription(&crate::billing::Subscription {
+            workspace_id: workspace_id.clone(),
+            customer_id: event
+                .customer_id
+                .clone()
+                .or_else(|| existing.as_ref().map(|s| s.customer_id.clone()))
+                .unwrap_or_default(),
+            subscription_id: event
+                .subscription_id
+                .clone()
+                .or_else(|| existing.as_ref().and_then(|s| s.subscription_id.clone())),
+            status,
+            // A checkout event carries no line items, so an existing
+            // seat count is kept rather than reset to zero.
+            seats: event
+                .seats
+                .or_else(|| existing.as_ref().map(|s| s.seats))
+                .unwrap_or(1),
+            current_period_end: event
+                .current_period_end
+                .or_else(|| existing.as_ref().and_then(|s| s.current_period_end)),
+        })
+        .await?;
+
+    tracing::info!(workspace = %workspace_id, ?status, "subscription updated");
+    Ok(StatusCode::NO_CONTENT)
+}

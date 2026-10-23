@@ -28,6 +28,8 @@ pub struct AppState {
     pub config: Arc<Config>,
     /// Where transactional e-mail goes.
     pub mailer: Arc<dyn crate::mail::Mailer>,
+    /// Stripe, when this deployment charges. `None` is self-hosting.
+    pub stripe: Option<Arc<crate::billing::stripe::Stripe>>,
 }
 
 impl std::fmt::Debug for AppState {
@@ -60,11 +62,30 @@ impl AppState {
         config: Config,
         mailer: Arc<dyn crate::mail::Mailer>,
     ) -> Self {
+        // Billing is off unless every piece is configured. A key with
+        // no webhook secret would take payments and never hear that
+        // they succeeded, which is worse than not charging.
+        let stripe = config
+            .bills()
+            .then(|| {
+                crate::billing::stripe::Stripe::new(
+                    config.stripe_secret_key.clone().unwrap_or_default(),
+                    config.stripe_price_id.clone().unwrap_or_default(),
+                )
+            })
+            .transpose()
+            .unwrap_or_else(|error| {
+                tracing::error!(%error, "Stripe is misconfigured; seats will not be charged");
+                None
+            })
+            .map(Arc::new);
+
         Self {
             store,
             hub: Hub::new(),
             config: Arc::new(config),
             mailer,
+            stripe,
         }
     }
 
@@ -202,6 +223,16 @@ pub fn router(state: AppState) -> Router {
             "/v1/workspaces/{id}/invitations/{invitation_id}",
             delete(routes::revoke_invitation),
         )
+        .route("/v1/workspaces/{id}/billing", get(routes::billing_status))
+        .route(
+            "/v1/workspaces/{id}/billing/checkout",
+            post(routes::billing_checkout),
+        )
+        .route(
+            "/v1/workspaces/{id}/billing/portal",
+            post(routes::billing_portal),
+        )
+        .route("/v1/billing/webhook", post(routes::billing_webhook))
         .route("/v1/invitations/{token}", get(routes::invitation_offer))
         .route(
             "/v1/invitations/{token}/accept",
