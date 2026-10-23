@@ -166,11 +166,16 @@ const consoleColour = {
           class="mt-0.5 shrink-0"
           :style="{ color: assertion.passed ? 'var(--success)' : 'var(--danger)' }"
         />
+        <!-- Its message always, passing or not. A grouped assertion
+             can be collapsed to a count because the group's name says
+             what it covers; a loose one has no name, so the message is
+             the only thing identifying it and "passed" on its own
+             says nothing about what did. -->
         <span
           class="selectable font-mono text-xs"
           :style="{ color: assertion.passed ? 'var(--text-secondary)' : 'var(--danger)' }"
         >
-          {{ assertion.passed ? 'passed' : assertion.message }}
+          {{ assertion.message }}
         </span>
       </li>
     </ul>

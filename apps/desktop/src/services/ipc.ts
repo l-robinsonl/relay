@@ -70,34 +70,15 @@ export interface ConflictView {
   detectedAt: number
 }
 
-/** One assertion's verdict. */
-export interface Assertion {
-  passed: boolean
-  message: string
-}
-
-/** A named group of assertions. */
-export interface TestCase {
-  name: string
-  assertions: Assertion[]
-  error?: string | null
-}
-
-/** A line a script printed. */
-export interface ConsoleLine {
-  level: 'log' | 'warn' | 'error'
-  text: string
-}
-
-/** Everything a script run produced. */
-export interface ScriptOutcome {
-  tests: TestCase[]
-  looseAssertions: Assertion[]
-  console: ConsoleLine[]
-  variables: Record<string, string>
-  error?: string | null
-  durationMs: number
-}
+// Script results come from Rust, so they are generated rather than
+// written out again here. The hand-written copies had already
+// drifted — they were missing `requestPatch`, which a pre-request
+// script sets — and nothing could have caught it: CI's drift check
+// compares the generated types against Rust, not against a second
+// copy somebody typed. Re-export, never redeclare.
+export type { Assertion, ConsoleLine, ScriptOutcome, TestCase } from '@relay/shared-types'
+// Re-exporting does not bind the name here, and this module uses it.
+import type { ScriptOutcome } from '@relay/shared-types'
 
 /**
  * What the Auth tab knows about a held OAuth token.
