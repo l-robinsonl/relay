@@ -344,6 +344,14 @@ Quote PSS. Never quote a figure this project did not measure.
 
 ## Working with Lee
 
+**Read `COMMUNICATION.md` before writing a reply.** It is short, and it
+is there because this kept going wrong: replies full of mechanism, in
+vocabulary he never asked to learn, with the part that actually affects
+him buried at the end. The rule in one line — **lead with what a person
+using Relay would notice, then say how, and keep it short.** Code,
+comments and `docs/` are a different audience; be as precise as you
+like there.
+
 - He wants the thing built end to end and will test-drive it. "You build
   the car, I'll test drive." Do not stop to ask permission for ordinary
   work.
