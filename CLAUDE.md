@@ -18,7 +18,8 @@ to switch. The user corrected me on this once; do not drift back.
 
 ## Status
 
-Phases 1–3 complete. Phase 4 mostly. Phase 5 part-done.
+Phases 1–6 complete, and Phase 7 built but never run against a real
+Stripe account. Nothing is signed and nothing is deployed.
 
 | Works | |
 |---|---|
@@ -39,10 +40,11 @@ Phases 1–3 complete. Phase 4 mostly. Phase 5 part-done.
 | Joining | an invitee pastes the link, picks a password, and lands in the workspace with its contents |
 | Assistant | `relay-agent` loop + nine tools + persistence + docked chat panel (Ctrl+J) + settings + MCP servers configurable from Settings. MCP over **stdio**; HTTP transport not wired. Verified against a real model |
 | Packaging (server) | Dockerfile + compose, unprivileged, healthcheck; CI builds and smoke-tests the image |
+| Billing | Stripe: entitlement model, signed webhooks, Checkout + portal, a seats panel in the Sync dialog. Off entirely unless all three Stripe variables are set |
 
 | Not built | |
 |---|---|
-| Relay Cloud / billing | designed only (Phases 6–7) |
+| Relay Cloud | nothing deployed: no host, no DNS |
 | Signing | nothing signed; macOS Gatekeeper will refuse outright |
 
 ## Verify
@@ -208,6 +210,26 @@ Run it: `npm run tauri dev`, or the built binary at
   following the URL the recipient is handed. `server/src/pages.rs`
   serves the two pages; `http_api.rs` has tests that follow the link out
   of the message body. Add one whenever a flow sends a URL.
+- **Seats bind on growth, by both routes in.** `create_invitation`
+  and `upsert_membership` each check the entitlement, inside
+  `SyncStore` for the same reason authorisation is. Gating only the
+  invitation left an administrator able to add members by user id and
+  never pay. Only *additions* are checked: an existing member stays
+  demotable and removable, or an over-limit workspace's only way out
+  is to pay. Nothing else is ever blocked — not syncing, not reading,
+  not `past_due`. A tool that holds your API requests must not hold
+  them hostage over a failed card.
+- **The Stripe return URLs are followed by a test.** The checkout
+  names `{public_url}/billing/done` as its `success_url`, and that
+  route did not exist, so anyone who paid landed on a 404. Third
+  instance of the same class of bug. The test pulls the URLs back out
+  of the form that was sent to Stripe and GETs them, rather than
+  asserting a string the same code produced; deleting the route fails
+  it.
+- **`Config` has a `Default` for fixtures only.** Four test fixtures
+  in two crates spelled out every field, so each new setting broke
+  them all. `from_env` stays an exhaustive struct literal — a new
+  setting must still be read from the environment deliberately.
 - **rusqlite pinned to 0.39.** 0.40 needs libsqlite3-sys 0.38; sqlx-sqlite
   needs <0.38; both link native sqlite3. Do not bump without checking.
 
@@ -302,9 +324,14 @@ Quote PSS. Never quote a figure this project did not measure.
 
 ## Next
 
-1. The assistant's interface, then MCP.
-2. Phase 6/7 — Relay Cloud on Neon, then Stripe. Billing last, by the
-   user's own sequencing.
+1. A look at the UI built blind. The members panel, scripts editor,
+   invited-join tab, chat panel, assistant settings, MCP settings and
+   now the seats panel have all been written without ever being seen.
+2. Deploy. The only things between here and a usable Relay Cloud are
+   a host and a DNS name; `render.yaml` and `deploy/compose.prod.yml`
+   are both ready and neither has been run in anger.
+3. Signing, which needs certificates (~£99/yr Apple, ~£120/yr
+   Windows).
 
 **The assistant has a live test.** `crates/relay-app/tests/assistant_live.rs`
 runs the real loop against a real model, skipping unless
@@ -324,8 +351,14 @@ create its check run under the default read-only `GITHUB_TOKEN`, and
 three advisories in transitive dependencies. Do not lower the audit job
 to a warning — it earned its place on its first run.
 
-Phase 4 is finished. What is left in Phase 5 is CI and signing, both of
-which need a git remote and a certificate respectively.
+Signing is the one thing left in Phase 5, and it needs certificates
+rather than code.
+
+**Billing has never met Stripe.** Every test drives a stub, so the
+shape of the requests is pinned but the API's own answers are not: a
+real `sk_test_` key, a real per-unit price and `stripe listen` would
+settle in ten minutes whether `checkout_session`'s form is right.
+Until then treat part three as written and reviewed, not proven.
 
 **Pre-request scripts, as built.** `ScriptEngine::run_pre_request` returns
 a `RequestPatch` (in `relay-models`, applied by
