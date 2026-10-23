@@ -5,6 +5,7 @@
 
 pub mod app;
 pub mod auth;
+pub mod billing;
 pub mod config;
 pub mod error;
 pub mod hub;
