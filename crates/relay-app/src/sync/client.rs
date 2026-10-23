@@ -564,7 +564,8 @@ async fn expect_success(response: reqwest::Response) -> RelayResult<reqwest::Res
         // The server reports an inaccessible workspace as 404 whether or
         // not it exists, so the two cannot be told apart here either.
         reqwest::StatusCode::NOT_FOUND => ErrorKind::Forbidden,
-        reqwest::StatusCode::PAYLOAD_TOO_LARGE => ErrorKind::Invalid,
+        // Seats, or any other limit the server bills for.
+        reqwest::StatusCode::PAYMENT_REQUIRED => ErrorKind::Invalid,
         s if s.is_client_error() => ErrorKind::Invalid,
         _ => ErrorKind::Sync,
     };

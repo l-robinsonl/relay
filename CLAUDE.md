@@ -234,6 +234,12 @@ Run it: `npm run tauri dev`, or the built binary at
   `Internal` on the wire. Found by running the real binary against
   the real API; no test caught it, because every test asserts on the
   response and the response was correct.
+- **A seat limit answers 402, not 413.** `LimitExceeded` carried
+  `PAYLOAD_TOO_LARGE`, left over from when it meant a body-size cap —
+  which tower-http now answers by itself, so seats are the only thing
+  that variant reports. In a real run "you need another seat" came
+  back looking like a malformed request. Payment Required is the
+  status this situation exists for.
 - **`Config` has a `Default` for fixtures only.** Four test fixtures
   in two crates spelled out every field, so each new setting broke
   them all. `from_env` stays an exhaustive struct literal — a new
@@ -367,13 +373,24 @@ to a warning — it earned its place on its first run.
 Signing is the one thing left in Phase 5, and it needs certificates
 rather than code.
 
-**Billing has met Stripe once, with a deliberately wrong key.** A
-checkout against the real API with `sk_test_dummy` was refused with
-`401: Invalid API Key provided`, which proves the request reached
-Stripe and was well-formed enough to be authenticated — but not that
-a real price id, quantity or metadata are right. A real `sk_test_`
-key and `stripe listen` would settle the rest in ten minutes. The
-webhook half has never run against Stripe's own signatures at all.
+**The webhook half is proven against real Stripe signatures.** Via
+the Stripe CLI against sandbox `acct_1IuHoz…`, with
+`stripe listen --events … --forward-to localhost:8791/v1/billing/webhook`:
+a real `checkout.session.completed` carrying
+`client_reference_id=w1` verified and activated the workspace;
+`stripe events resend` of the *same event id* logged "already
+applied" and changed nothing; a real `customer.subscription.updated`
+carrying `items[0][quantity]=5` moved the seat count, which is worth
+more than the stub tests because the payload shape was Stripe's and
+not mine; `customer.subscription.deleted` cancelled it, after which
+an invitation was refused and `head`/`export` still answered 200. A
+forged signature at the same running endpoint changed nothing.
+
+**The checkout half is still unproven.** It needs an `sk_test_` key
+in `STRIPE_SECRET_KEY`; the CLI's device auth keeps its token in the
+keyring and exposes no key to lift. Everything else is ready: test
+product `prod_VUpc1mJgVTjzTI`, price
+`price_1UTpxiHqleqjJY5Ok6CCOC79` (per-unit, annual, £24, sandbox).
 
 **Pre-request scripts, as built.** `ScriptEngine::run_pre_request` returns
 a `RequestPatch` (in `relay-models`, applied by

@@ -1881,6 +1881,43 @@ async fn a_member_who_is_not_an_administrator_is_not_offered_the_buttons() {
 }
 
 #[tokio::test]
+async fn running_out_of_seats_asks_for_payment_not_a_smaller_request() {
+    // It answered 413 "payload too large" in a real run, which reads
+    // as a malformed request to anyone looking at a log or a proxy.
+    // 402 is the status this situation is for.
+    let server = start(SignupMode::Open).await;
+    let token = owner_with_workspace(&server).await;
+
+    server
+        .store
+        .save_subscription(&relay_server::billing::Subscription {
+            workspace_id: "w1".into(),
+            customer_id: "cus_1".into(),
+            subscription_id: Some("sub_1".into()),
+            status: relay_server::billing::SubscriptionStatus::Active,
+            seats: 1,
+            current_period_end: None,
+        })
+        .await
+        .unwrap();
+
+    let response = server
+        .post_auth(
+            "/v1/workspaces/w1/invitations",
+            &token,
+            json!({ "email": "bob@example.com" }),
+        )
+        .await;
+
+    assert_eq!(response.status(), 402);
+    let body: Value = response.json().await.unwrap();
+    assert_eq!(body["error"], "limitExceeded");
+    assert_eq!(body["limit"], "seats");
+    // The message is shown to a person, so it has to say what to do.
+    assert!(body["message"].as_str().unwrap().contains("seat"), "{body}");
+}
+
+#[tokio::test]
 async fn a_server_that_does_not_charge_refuses_to_start_a_checkout() {
     let server = start(SignupMode::Open).await;
     let token = owner_with_workspace(&server).await;

@@ -97,7 +97,11 @@ impl ServerError {
             Self::EmailNotVerified => StatusCode::FORBIDDEN,
             Self::Forbidden => StatusCode::NOT_FOUND,
             Self::BadRequest(_) => StatusCode::BAD_REQUEST,
-            Self::LimitExceeded { .. } => StatusCode::PAYLOAD_TOO_LARGE,
+            // 402, not 413. The only limit this carries is seats, and
+            // "payload too large" described a body-size cap that
+            // tower-http now answers by itself. A seat limit read as
+            // 413 in a real run and looked like a malformed request.
+            Self::LimitExceeded { .. } => StatusCode::PAYMENT_REQUIRED,
             Self::Conflict(_) => StatusCode::CONFLICT,
             Self::Database(_)
             | Self::PasswordHash(_)
@@ -180,6 +184,15 @@ mod tests {
         assert!(!body.contains("postgres://"), "leaked: {body}");
         assert!(!body.contains("connection string"));
         assert_eq!(err.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[test]
+    fn a_seat_limit_asks_for_payment_rather_than_complaining_about_size() {
+        let err = ServerError::LimitExceeded {
+            limit: "seats",
+            message: "buy another seat".into(),
+        };
+        assert_eq!(err.status(), StatusCode::PAYMENT_REQUIRED);
     }
 
     #[test]
