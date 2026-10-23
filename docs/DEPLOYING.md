@@ -94,6 +94,19 @@ docker compose -f deploy/compose.prod.yml exec relay \
 Then copy `backup.db` off the machine. With PostgreSQL, use whatever
 your provider offers; Neon keeps point-in-time history of its own.
 
+## What you do not need
+
+One web service. That is the whole deployment.
+
+- **No background worker.** There is no job queue. Mail is sent inside
+  the request that causes it, migrations run at boot, and nothing is
+  deferred.
+- **No cron job.** Expired tokens and accepted invitations are swept
+  by the next write that touches the same user or workspace, so the
+  tables stay bounded without anything scheduled.
+- **No Redis or key-value store.** Sessions are rows in the database.
+- **No object storage.** Nothing in Relay writes a blob.
+
 ## Getting it wrong in ways that are quiet
 
 The server warns at startup about each of these, because none of them

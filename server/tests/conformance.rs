@@ -1265,3 +1265,94 @@ async fn an_admin_of_one_workspace_cannot_revoke_anothers() {
     })
     .await;
 }
+
+#[tokio::test]
+async fn issuing_a_token_sweeps_that_users_lapsed_ones() {
+    // Keeps the table bounded without a scheduled job, which would mean
+    // a second service to deploy and to forget about.
+    for_each_backend(|store| async move {
+        let user = seed_user_id(&store, "ada@example.com").await;
+        let now = relay_models::Timestamp::now().as_millis();
+
+        store
+            .create_email_token(&user, EmailTokenPurpose::VerifyEmail, "dead", now - 1)
+            .await
+            .unwrap();
+        store
+            .create_email_token(&user, EmailTokenPurpose::VerifyEmail, "live", in_an_hour())
+            .await
+            .unwrap();
+
+        // The second issue swept the first, expired one.
+        assert_eq!(
+            store
+                .consume_email_token(EmailTokenPurpose::VerifyEmail, "dead", now)
+                .await
+                .unwrap(),
+            None
+        );
+        // And left the good one alone.
+        assert!(
+            store
+                .consume_email_token(EmailTokenPurpose::VerifyEmail, "live", now)
+                .await
+                .unwrap()
+                .is_some()
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn sweeping_does_not_touch_another_users_tokens() {
+    for_each_backend(|store| async move {
+        let ada = seed_user_id(&store, "ada@example.com").await;
+        let grace = seed_user_id(&store, "grace@example.com").await;
+
+        store
+            .create_email_token(&grace, EmailTokenPurpose::VerifyEmail, "hers", in_an_hour())
+            .await
+            .unwrap();
+        store
+            .create_email_token(&ada, EmailTokenPurpose::VerifyEmail, "his", in_an_hour())
+            .await
+            .unwrap();
+
+        let now = relay_models::Timestamp::now().as_millis();
+        assert!(
+            store
+                .consume_email_token(EmailTokenPurpose::VerifyEmail, "hers", now)
+                .await
+                .unwrap()
+                .is_some(),
+            "one user's new token swept another's"
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn inviting_sweeps_lapsed_and_accepted_invitations() {
+    for_each_backend(|store| async move {
+        let (owner, guest) = invited_workspace(&store).await;
+        let now = relay_models::Timestamp::now().as_millis();
+
+        // One expired, one accepted, one still open.
+        store
+            .create_invitation(&owner, "w1", "old@example.com", Role::Viewer, "x1", now - 1)
+            .await
+            .unwrap();
+        invite(&store, &owner, "grace@example.com", Role::Viewer, "x2").await;
+        store
+            .accept_invitation(&guest.user_id, "grace@example.com", "x2", now)
+            .await
+            .unwrap();
+
+        invite(&store, &owner, "fresh@example.com", Role::Viewer, "x3").await;
+
+        let pending = store.list_invitations(&owner, "w1").await.unwrap();
+        assert_eq!(pending.len(), 1, "{pending:?}");
+        assert_eq!(pending[0].email, "fresh@example.com");
+    })
+    .await;
+}

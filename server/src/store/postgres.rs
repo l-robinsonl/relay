@@ -242,6 +242,16 @@ impl SyncStore for PostgresStore {
         token_hash: &str,
         expires_at: i64,
     ) -> ServerResult<()> {
+        // Sweep this user's lapsed tokens while we are here. It keeps the
+        // table from growing without bound and means the deployment
+        // needs no scheduled job of its own just to take out the
+        // rubbish — one fewer moving part to run and to forget.
+        sqlx::query("DELETE FROM relay.email_tokens WHERE user_id = $1 AND expires_at <= $2")
+            .bind(user_id)
+            .bind(now_millis())
+            .execute(&self.pool)
+            .await?;
+
         sqlx::query(
             "INSERT INTO relay.email_tokens
                  (token_hash, user_id, purpose, expires_at, created_at)
@@ -477,6 +487,17 @@ impl SyncStore for PostgresStore {
         let id = uuid::Uuid::new_v4().to_string();
         let now = now_millis();
         let email = email.trim().to_lowercase();
+
+        // Lapsed and accepted invitations for this workspace go at the
+        // same time, for the same reason.
+        sqlx::query(
+            "DELETE FROM relay.invitations
+             WHERE workspace_id = $1 AND (expires_at <= $2 OR accepted_at IS NOT NULL)",
+        )
+        .bind(workspace_id)
+        .bind(now)
+        .execute(&self.pool)
+        .await?;
 
         sqlx::query(
             "INSERT INTO relay.invitations
