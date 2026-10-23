@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
-import { Loader2, Send, Sparkles, SquarePen, TriangleAlert } from '@lucide/vue'
+import { Loader2, Send, Settings2, Sparkles, SquarePen, TriangleAlert } from '@lucide/vue'
 import type { UnlistenFn } from '@tauri-apps/api/event'
 import type {
   AssistantEvent,
@@ -12,6 +12,7 @@ import type {
 } from '@/services/ipc'
 import { api } from '@/services/ipc'
 import { useWorkspaceStore } from '@/stores/workspace'
+import AssistantSettingsDialog from './AssistantSettings.vue'
 import ToolCallRow from './ToolCallRow.vue'
 
 const workspace = useWorkspaceStore()
@@ -38,6 +39,29 @@ const settings = ref<AssistantSettings>({
   model: '',
   baseUrl: '',
 })
+const settingsOpen = ref(false)
+
+/** Remembers the provider and model across restarts. Never the key —
+ *  that is in the credential store and does not come back out. */
+const SETTINGS_KEY = 'assistant'
+
+api
+  .stateGet(SETTINGS_KEY)
+  .then((stored) => {
+    if (!stored) return
+    const parsed = JSON.parse(stored) as Partial<AssistantSettings>
+    settings.value = { ...settings.value, ...parsed }
+  })
+  // A corrupt preference is not worth refusing to open over.
+  .catch(() => {})
+
+watch(
+  settings,
+  (value) => {
+    api.stateSet(SETTINGS_KEY, JSON.stringify(value)).catch(() => {})
+  },
+  { deep: true },
+)
 
 let unlisten: UnlistenFn | null = null
 
@@ -191,6 +215,14 @@ defineExpose({ hydrate, startOver })
       >
         <SquarePen :size="13" />
       </button>
+      <button
+        type="button"
+        class="rounded p-1 text-muted hover:text-primary"
+        aria-label="Assistant settings"
+        @click="settingsOpen = true"
+      >
+        <Settings2 :size="13" />
+      </button>
     </header>
 
     <div ref="transcript" class="min-h-0 flex-1 space-y-2.5 overflow-y-auto p-3">
@@ -255,8 +287,11 @@ defineExpose({ hydrate, startOver })
         class="mb-2 rounded border p-2 text-xs text-muted"
         :style="{ borderColor: 'var(--border-default)' }"
       >
-        No API key is set for {{ settings.provider }}. Add one under Settings — Relay
-        ships no key and sends your requests straight to the provider.
+        No API key is set for {{ settings.provider }}.
+        <button type="button" class="underline underline-offset-2" @click="settingsOpen = true">
+          Add one
+        </button>
+        — Relay ships no key and sends your requests straight to the provider.
       </p>
 
       <div class="flex gap-2">
@@ -282,5 +317,10 @@ defineExpose({ hydrate, startOver })
       </div>
       <p class="mt-1 text-xxs text-muted">Enter to send, Shift+Enter for a new line.</p>
     </div>
+    <AssistantSettingsDialog
+      v-model="settings"
+      :open="settingsOpen"
+      @close="settingsOpen = false"
+    />
   </section>
 </template>

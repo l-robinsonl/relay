@@ -14,7 +14,11 @@ vi.mock('@/services/ipc', () => ({
     assistantApprove: vi.fn(),
     assistantDenyAll: vi.fn(),
     assistantHasKey: vi.fn(),
+    assistantSetKey: vi.fn(),
+    assistantClearKey: vi.fn(),
     onAssistantEvent: vi.fn(),
+    stateGet: vi.fn(),
+    stateSet: vi.fn(),
   },
 }))
 
@@ -39,6 +43,8 @@ describe('AssistantPanel', () => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
     mocked.assistantHasKey.mockResolvedValue(true)
+    mocked.stateGet.mockResolvedValue(null)
+    mocked.stateSet.mockResolvedValue(undefined)
     mocked.onAssistantEvent.mockImplementation(async (handler) => {
       emit = handler
       return () => {}

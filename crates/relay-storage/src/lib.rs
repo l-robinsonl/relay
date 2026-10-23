@@ -38,4 +38,7 @@ pub mod state_keys {
     pub const THEME: &str = "theme";
     /// Serialised panel sizes and orientation.
     pub const LAYOUT: &str = "layout";
+    /// Which provider and model the assistant uses. Never the key —
+    /// that lives in the credential store.
+    pub const ASSISTANT: &str = "assistant";
 }
