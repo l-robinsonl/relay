@@ -37,6 +37,7 @@ Phases 1–3 complete. Phase 4 mostly. Phase 5 part-done.
 | Invitations | workspace + role, bound to the invited address, admin-only, revocable; `invite` signup mode now works |
 | Members UI | invite, change a role, remove, withdraw an invitation — all from the Sync dialog |
 | Joining | an invitee pastes the link, picks a password, and lands in the workspace with its contents |
+| Assistant (in progress) | `relay-agent`: provider trait (Anthropic + OpenAI-compatible), tool registry with a risk model, the loop. No tools over the app yet, no UI, no MCP |
 | Packaging (server) | Dockerfile + compose, unprivileged, healthcheck; CI builds and smoke-tests the image |
 
 | Not built | |
@@ -141,6 +142,23 @@ Run it: `npm run tauri dev`, or the built binary at
   `cargo test --workspace`, and CI's drift check could not have caught
   a stale one. relay-sync and relay-script are in the list now; add any
   new crate that derives `TS`.
+- **The agent loop is Rust, deliberately.** The obvious route was an
+  agent framework in TypeScript beside the interface. That puts the
+  user's API key in the webview, where Relay has never put a
+  credential; it sends every tool call across IPC twice; and it cannot
+  spawn a local MCP server. The loop is in `relay-agent`, the webview
+  sees a transcript. No LangChain — a tool-calling loop is a hundred
+  lines, and the framework's value is provider abstraction Relay
+  already has.
+- **Conversations go in SQLite, not a hosted store.** DynamoDB was
+  suggested and declined: a product arguing your data is on your disk
+  cannot answer "where do my conversations live" with someone else's
+  cloud.
+- **`ToolRisk` decides what gets confirmed.** `Send` and `Destructive`
+  always ask. `Send` is its own level because a request Relay makes is
+  indistinguishable at the far end from one the user made, and "list
+  the invoices" and "delete the invoices" differ by one word in a
+  prompt. Classify a new tool deliberately.
 - **Build the client path in the same breath as the server one.**
   Twice now a feature has been finished server-side, tested over HTTP,
   and shipped with no way for the application to reach it — e-mailed
