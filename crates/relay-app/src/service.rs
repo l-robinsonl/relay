@@ -1862,17 +1862,37 @@ impl RelayService {
 
         let history = self.assistant_history(&conversation_id).await?;
 
-        let agent = relay_agent::Agent::new(
-            provider,
-            crate::assistant::registry(self.clone(), workspace),
-            SYSTEM_PROMPT,
-        )
-        .with_model(settings.model.clone())
-        .with_approver(Arc::new(crate::assistant::AskTheUser::new(
-            approvals,
-            events.clone(),
-        )))
-        .with_progress(Arc::new(crate::assistant::Forwarding::new(events)));
+        let mut tools = crate::assistant::registry(self.clone(), workspace);
+
+        // Connected for the length of the turn, then shut down. A
+        // persistent pool would avoid a process spawn per question and
+        // is the obvious improvement; starting one local server takes
+        // a fraction of a second, so this is not worth the state
+        // management yet. A server that will not start is reported to
+        // the model as a missing tool rather than failing the turn —
+        // the other tools still work.
+        let mut connections = Vec::new();
+        for server in self.assistant_mcp_servers().await.unwrap_or_default() {
+            match relay_agent::mcp::connect(&server).await {
+                Ok(connection) => {
+                    for tool in connection.tools() {
+                        tools.add(tool.clone());
+                    }
+                    connections.push(connection);
+                }
+                Err(error) => {
+                    tracing::warn!(server = server.name(), %error, "an MCP server did not start");
+                }
+            }
+        }
+
+        let agent = relay_agent::Agent::new(provider, tools, SYSTEM_PROMPT)
+            .with_model(settings.model.clone())
+            .with_approver(Arc::new(crate::assistant::AskTheUser::new(
+                approvals,
+                events.clone(),
+            )))
+            .with_progress(Arc::new(crate::assistant::Forwarding::new(events)));
 
         let turn = agent
             .run(&history, relay_agent::provider::Message::user(question))
@@ -1909,6 +1929,10 @@ impl RelayService {
             .call(move |c| relay_storage::ConversationRepo::append(c, &id, &rows))
             .await?;
 
+        for connection in connections {
+            connection.close().await;
+        }
+
         Ok(conversation_id)
     }
 
@@ -1936,6 +1960,57 @@ impl RelayService {
                 tool_results: serde_json::from_value(row.tool_results).unwrap_or_default(),
             })
             .collect())
+    }
+}
+
+impl RelayService {
+    /// The MCP servers the user has configured.
+    pub async fn assistant_mcp_servers(&self) -> RelayResult<Vec<relay_agent::McpServer>> {
+        let stored = self
+            .state_get(relay_storage::state_keys::ASSISTANT_MCP.to_string())
+            .await?;
+
+        Ok(stored
+            .and_then(|raw| serde_json::from_str(&raw).ok())
+            .unwrap_or_default())
+    }
+
+    /// Replaces the configured servers.
+    pub async fn assistant_set_mcp_servers(
+        &self,
+        servers: Vec<relay_agent::McpServer>,
+    ) -> RelayResult<()> {
+        let encoded = serde_json::to_string(&servers)
+            .map_err(|e| RelayError::new(ErrorKind::Internal, e.to_string()))?;
+
+        self.state_set(
+            relay_storage::state_keys::ASSISTANT_MCP.to_string(),
+            encoded,
+        )
+        .await
+    }
+
+    /// Connects to one server and reports what it offers.
+    ///
+    /// For the settings screen: somebody who has just typed a command
+    /// wants to know it works before closing the dialog, not when
+    /// their next question quietly has fewer tools than they expected.
+    pub async fn assistant_mcp_probe(
+        &self,
+        server: relay_agent::McpServer,
+    ) -> RelayResult<Vec<String>> {
+        let connection = relay_agent::mcp::connect(&server)
+            .await
+            .map_err(|e| RelayError::new(ErrorKind::Internal, e.to_string()))?;
+
+        let names = connection
+            .tools()
+            .iter()
+            .map(|t| t.name().to_string())
+            .collect();
+
+        connection.close().await;
+        Ok(names)
     }
 }
 

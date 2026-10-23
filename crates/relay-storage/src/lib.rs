@@ -41,4 +41,6 @@ pub mod state_keys {
     /// Which provider and model the assistant uses. Never the key —
     /// that lives in the credential store.
     pub const ASSISTANT: &str = "assistant";
+    /// The MCP servers the assistant may use, as JSON.
+    pub const ASSISTANT_MCP: &str = "assistant_mcp";
 }

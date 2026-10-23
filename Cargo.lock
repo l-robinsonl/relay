@@ -3544,6 +3544,7 @@ dependencies = [
 name = "relay-desktop"
 version = "0.1.0"
 dependencies = [
+ "relay-agent",
  "relay-app",
  "relay-core",
  "relay-http",

@@ -113,6 +113,17 @@ export interface OAuthTokenStatus {
 
 // --- the assistant ---------------------------------------------------------
 
+/** One MCP server the assistant may use. */
+export type McpServer =
+  | {
+    transport: 'stdio'
+    name: string
+    command: string
+    args: string[]
+    env: Record<string, string>
+  }
+  | { transport: 'http', name: string, url: string }
+
 /** Which model the assistant uses, and where. */
 export interface AssistantSettings {
   provider: 'anthropic' | 'openai' | 'compatible'
@@ -328,6 +339,13 @@ export const api = {
     call<void>('assistant_clear_key', { provider }),
   assistantHasKey: (provider: string) =>
     call<boolean>('assistant_has_key', { provider }),
+  assistantMcpServers: () => call<McpServer[]>('assistant_mcp_servers'),
+  assistantSetMcpServers: (servers: McpServer[]) =>
+    call<void>('assistant_set_mcp_servers', { servers }),
+  /** Connects once and returns the tool names, so a typed command can
+   *  be checked before the dialog is closed. */
+  assistantMcpProbe: (server: McpServer) =>
+    call<string[]>('assistant_mcp_probe', { server }),
 
   /** Progress while a turn runs. Returns an unsubscribe function. */
   onAssistantEvent: (handler: (event: AssistantEvent) => void): Promise<UnlistenFn> =>

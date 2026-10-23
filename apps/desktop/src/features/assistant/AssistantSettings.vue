@@ -3,6 +3,7 @@ import { computed, ref, watch } from 'vue'
 import { Check, Eye, EyeOff, Loader2, Sparkles, X } from '@lucide/vue'
 import type { AssistantSettings } from '@/services/ipc'
 import { api } from '@/services/ipc'
+import McpServers from './McpServers.vue'
 
 const props = defineProps<{ open: boolean, modelValue: AssistantSettings }>()
 const emit = defineEmits<{
@@ -206,6 +207,10 @@ async function forget () {
                 Forget it
               </button>
             </p>
+          </div>
+
+          <div class="border-t border-subtle pt-4">
+            <McpServers />
           </div>
         </div>
 

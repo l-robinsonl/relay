@@ -37,7 +37,7 @@ Phases 1–3 complete. Phase 4 mostly. Phase 5 part-done.
 | Invitations | workspace + role, bound to the invited address, admin-only, revocable; `invite` signup mode now works |
 | Members UI | invite, change a role, remove, withdraw an invitation — all from the Sync dialog |
 | Joining | an invitee pastes the link, picks a password, and lands in the workspace with its contents |
-| Assistant | `relay-agent` loop + nine tools + persistence + docked chat panel (Ctrl+J) + settings. MCP over **stdio**; HTTP transport not wired. Verified against a real model |
+| Assistant | `relay-agent` loop + nine tools + persistence + docked chat panel (Ctrl+J) + settings + MCP servers configurable from Settings. MCP over **stdio**; HTTP transport not wired. Verified against a real model |
 | Packaging (server) | Dockerfile + compose, unprivileged, healthcheck; CI builds and smoke-tests the image |
 
 | Not built | |
@@ -191,12 +191,13 @@ Run it: `npm run tauri dev`, or the built binary at
   indistinguishable at the far end from one the user made, and "list
   the invoices" and "delete the invoices" differ by one word in a
   prompt. Classify a new tool deliberately.
-- **Build the client path in the same breath as the server one.**
-  Twice now a feature has been finished server-side, tested over HTTP,
-  and shipped with no way for the application to reach it — e-mailed
-  links pointing at routes that did not exist, then invitations the
-  client could not present. Both read as complete from the test suite.
-  If a flow sends a person somewhere, follow them there.
+- **Build the client path in the same breath as the backend one.**
+  This has now happened three times: e-mailed links pointing at routes
+  that did not exist, invitations the client could not present, and an
+  MCP client with no way to configure a server. Each read as complete
+  from the test suite, because the tests reached past the part a
+  person uses. Writing the rule down did not stop the third. Before
+  calling anything done, name the click that reaches it.
 - **An invitation is bound to the address it was sent to.** Not just
   to its token. E-mails get forwarded, and a token-only check would
   turn a forwarded invitation into access to someone else's workspace.

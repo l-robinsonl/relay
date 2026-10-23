@@ -906,3 +906,29 @@ pub fn assistant_clear_key(service: State<'_, RelayService>, provider: String) -
 pub fn assistant_has_key(service: State<'_, RelayService>, provider: String) -> bool {
     service.assistant_has_key(&provider)
 }
+
+/// The MCP servers the assistant may use.
+#[tauri::command]
+pub async fn assistant_mcp_servers(
+    service: State<'_, RelayService>,
+) -> RelayResult<Vec<relay_agent::McpServer>> {
+    service.assistant_mcp_servers().await
+}
+
+/// Replaces the configured MCP servers.
+#[tauri::command]
+pub async fn assistant_set_mcp_servers(
+    service: State<'_, RelayService>,
+    servers: Vec<relay_agent::McpServer>,
+) -> RelayResult<()> {
+    service.assistant_set_mcp_servers(servers).await
+}
+
+/// Connects to one server and lists what it offers.
+#[tauri::command]
+pub async fn assistant_mcp_probe(
+    service: State<'_, RelayService>,
+    server: relay_agent::McpServer,
+) -> RelayResult<Vec<String>> {
+    service.assistant_mcp_probe(server).await
+}

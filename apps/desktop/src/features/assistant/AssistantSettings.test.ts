@@ -9,6 +9,9 @@ vi.mock('@/services/ipc', () => ({
     assistantHasKey: vi.fn(),
     assistantSetKey: vi.fn(),
     assistantClearKey: vi.fn(),
+    assistantMcpServers: vi.fn(),
+    assistantSetMcpServers: vi.fn(),
+    assistantMcpProbe: vi.fn(),
   },
 }))
 
@@ -32,6 +35,9 @@ describe('AssistantSettings', () => {
     mocked.assistantHasKey.mockResolvedValue(false)
     mocked.assistantSetKey.mockResolvedValue(undefined)
     mocked.assistantClearKey.mockResolvedValue(undefined)
+    mocked.assistantMcpServers.mockResolvedValue([])
+    mocked.assistantSetMcpServers.mockResolvedValue(undefined)
+    mocked.assistantMcpProbe.mockResolvedValue([])
   })
 
   it('says where the key goes and that Relay keeps none', async () => {

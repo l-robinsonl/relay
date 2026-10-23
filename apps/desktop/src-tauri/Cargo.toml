@@ -23,6 +23,7 @@ relay-core.workspace = true
 relay-http.workspace = true
 relay-storage.workspace = true
 relay-app.workspace = true
+relay-agent.workspace = true
 
 tauri = { version = "2.12", features = [] }
 tauri-plugin-dialog = "2.8"
