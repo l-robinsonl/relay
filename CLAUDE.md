@@ -226,6 +226,14 @@ Run it: `npm run tauri dev`, or the built binary at
   of the form that was sent to Stripe and GETs them, rather than
   asserting a string the same code produced; deleting the route fails
   it.
+- **`ServerError::Stripe` exists for the same reason as `Mail`.**
+  Routing a provider refusal through `Internal` logs the literal
+  string "internal error", so an operator with a wrong price id or a
+  test key against a live price has nothing at all to go on. The
+  variant keeps its detail in `Display` and still flattens to
+  `Internal` on the wire. Found by running the real binary against
+  the real API; no test caught it, because every test asserts on the
+  response and the response was correct.
 - **`Config` has a `Default` for fixtures only.** Four test fixtures
   in two crates spelled out every field, so each new setting broke
   them all. `from_env` stays an exhaustive struct literal — a new
@@ -354,11 +362,13 @@ to a warning — it earned its place on its first run.
 Signing is the one thing left in Phase 5, and it needs certificates
 rather than code.
 
-**Billing has never met Stripe.** Every test drives a stub, so the
-shape of the requests is pinned but the API's own answers are not: a
-real `sk_test_` key, a real per-unit price and `stripe listen` would
-settle in ten minutes whether `checkout_session`'s form is right.
-Until then treat part three as written and reviewed, not proven.
+**Billing has met Stripe once, with a deliberately wrong key.** A
+checkout against the real API with `sk_test_dummy` was refused with
+`401: Invalid API Key provided`, which proves the request reached
+Stripe and was well-formed enough to be authenticated — but not that
+a real price id, quantity or metadata are right. A real `sk_test_`
+key and `stripe listen` would settle the rest in ten minutes. The
+webhook half has never run against Stripe's own signatures at all.
 
 **Pre-request scripts, as built.** `ScriptEngine::run_pre_request` returns
 a `RequestPatch` (in `relay-models`, applied by

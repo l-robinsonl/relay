@@ -69,6 +69,16 @@ pub enum ServerError {
     #[error("the mail provider refused the message: {0}")]
     Mail(String),
 
+    /// The payment provider refused a request, or could not be reached.
+    ///
+    /// Keeps its detail in `Display` for the same reason as
+    /// [`Self::Mail`]: "No such price: price_x", or a test key used
+    /// against a live price, is the operator's entire diagnosis, and
+    /// it describes the Stripe configuration rather than Relay's
+    /// schema or queries. Clients still get a flat `Internal`.
+    #[error("Stripe refused the request: {0}")]
+    Stripe(String),
+
     /// The server is misconfigured.
     ///
     /// Keeps its message, unlike [`Self::Internal`]: this is reported to
@@ -93,6 +103,7 @@ impl ServerError {
             | Self::PasswordHash(_)
             | Self::Internal(_)
             | Self::Mail(_)
+            | Self::Stripe(_)
             | Self::Config(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -125,6 +136,7 @@ impl ServerError {
             | Self::PasswordHash(_)
             | Self::Internal(_)
             | Self::Mail(_)
+            | Self::Stripe(_)
             | Self::Config(_) => SyncError::Internal,
         }
     }
@@ -137,6 +149,7 @@ impl IntoResponse for ServerError {
             ServerError::Database(_)
                 | ServerError::PasswordHash(_)
                 | ServerError::Internal(_)
+                | ServerError::Stripe(_)
                 | ServerError::Config(_)
         ) {
             tracing::error!("{self}");
@@ -167,6 +180,18 @@ mod tests {
         assert!(!body.contains("postgres://"), "leaked: {body}");
         assert!(!body.contains("connection string"));
         assert_eq!(err.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[test]
+    fn a_stripe_refusal_reaches_the_log_but_not_the_client() {
+        // The whole point of the variant. Routing it through
+        // `Internal` logged the literal string "internal error", so
+        // an operator with a wrong price id had nothing to go on.
+        let err = ServerError::Stripe("No such price: 'price_wrong'".into());
+
+        assert!(err.to_string().contains("price_wrong"), "{err}");
+        let body = serde_json::to_string(&err.to_sync_error()).unwrap();
+        assert!(!body.contains("price_wrong"), "leaked: {body}");
     }
 
     #[test]

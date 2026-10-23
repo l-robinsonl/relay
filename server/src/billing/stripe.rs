@@ -107,7 +107,7 @@ impl Stripe {
         body["url"]
             .as_str()
             .map(str::to_string)
-            .ok_or_else(|| ServerError::Internal("Stripe returned a session with no URL".into()))
+            .ok_or_else(|| ServerError::Stripe("returned a session with no URL".into()))
     }
 
     /// Opens the customer portal, returning the URL.
@@ -124,7 +124,7 @@ impl Stripe {
         body["url"]
             .as_str()
             .map(str::to_string)
-            .ok_or_else(|| ServerError::Internal("Stripe returned a portal with no URL".into()))
+            .ok_or_else(|| ServerError::Stripe("returned a portal with no URL".into()))
     }
 
     async fn post(
@@ -146,7 +146,7 @@ impl Stripe {
         let response = request
             .send()
             .await
-            .map_err(|e| ServerError::Internal(format!("could not reach Stripe: {e}")))?;
+            .map_err(|e| ServerError::Stripe(format!("could not be reached: {e}")))?;
 
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
@@ -160,13 +160,11 @@ impl Stripe {
                 .and_then(|v| v["error"]["message"].as_str().map(str::to_string))
                 .unwrap_or(body);
 
-            return Err(ServerError::Internal(format!(
-                "Stripe refused the request ({status}): {detail}"
-            )));
+            return Err(ServerError::Stripe(format!("{status}: {detail}")));
         }
 
         serde_json::from_str(&body)
-            .map_err(|e| ServerError::Internal(format!("Stripe sent something unreadable: {e}")))
+            .map_err(|e| ServerError::Stripe(format!("sent something unreadable: {e}")))
     }
 }
 
