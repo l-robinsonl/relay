@@ -15,23 +15,23 @@ WORKDIR /build
 # Dependencies first, in their own layer, so editing Relay's own source
 # does not re-download and recompile the whole crate graph.
 COPY Cargo.toml Cargo.lock ./
-COPY crates/relay-models/Cargo.toml   crates/relay-models/
-COPY crates/relay-http/Cargo.toml     crates/relay-http/
-COPY crates/relay-storage/Cargo.toml  crates/relay-storage/
-COPY crates/relay-core/Cargo.toml     crates/relay-core/
-COPY crates/relay-script/Cargo.toml   crates/relay-script/
-COPY crates/relay-sync/Cargo.toml     crates/relay-sync/
-COPY crates/relay-app/Cargo.toml      crates/relay-app/
-COPY server/Cargo.toml                server/
+# Every crate's manifest, by wildcard rather than by name. An earlier
+# version listed them, and adding a crate broke this build with an
+# error about a workspace member that could not be found — a long way
+# from the change that caused it.
+COPY crates/ /tmp/crates/
+COPY server/Cargo.toml server/
 
 # Stub sources, enough for `cargo build` to resolve and compile the
 # dependency graph. The real sources replace them below.
 RUN set -eux; \
-    for crate in crates/relay-models crates/relay-http crates/relay-storage \
-                 crates/relay-core crates/relay-script crates/relay-sync \
-                 crates/relay-app; do \
-      mkdir -p "$crate/src" && echo '' > "$crate/src/lib.rs"; \
+    for manifest in /tmp/crates/*/Cargo.toml; do \
+      crate="crates/$(basename "$(dirname "$manifest")")"; \
+      mkdir -p "$crate/src"; \
+      cp "$manifest" "$crate/Cargo.toml"; \
+      echo '' > "$crate/src/lib.rs"; \
     done; \
+    rm -rf /tmp/crates; \
     mkdir -p server/src && echo 'fn main() {}' > server/src/main.rs; \
     # The desktop crate is not part of this image and needs GTK to build.
     sed -i '/apps\/desktop\/src-tauri/d' Cargo.toml; \
