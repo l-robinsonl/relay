@@ -271,18 +271,23 @@ Run it: `npm run tauri dev`, or the built binary at
 
 ## Environment
 
+**This repository is public.** Hostnames, project ids, account names
+and the sending domain live in `CLAUDE.local.md`, which is
+gitignored. Read it first — it is half of this section. Keep new
+specifics there and the lesson here, and never commit a value that
+names where this infrastructure actually is.
+
 - Rust via rustup, **not on PATH** — `. "$HOME/.cargo/env"` first.
-- `.env.local` (gitignored) holds `NEON_API_KEY`, `NEON_ORG_ID`,
-  `NEON_PROJECT_ID`, `DATABASE_URL` (the user's *other* app — do not
-  touch), `RELAY_DATABASE_URL` (Relay's own `relay` database) and
-  `RESEND_API_KEY`.
-- **Two Neon projects, and they are easy to confuse.** `NEON_PROJECT_ID`
-  is project **postbox** (`REDACTED-neon-project`), endpoint
-  `REDACTED-neon-endpoint`, host suffix **c-7** — that is Relay's. The
-  other app lives on `REDACTED-other-endpoint`, suffix **c-8**, which
-  is also where the Neon Auth JWKS endpoint is. `RELAY_DATABASE_URL`
-  once pointed at the c-8 host with dbname `relay`, a database that
-  exists only on c-7, so every Postgres test silently skipped.
+- `.env.local` (gitignored) holds the Neon and Resend credentials,
+  plus `RELAY_DATABASE_URL` and `RELAY_TEST_DATABASE_URL`. One of the
+  variables in there belongs to a **different application** — check
+  `CLAUDE.local.md` before touching any of them.
+- **There are two Neon projects and they are easy to confuse.** One
+  is Relay's, one is not, and the Neon Auth JWKS endpoint sits on the
+  wrong one. `RELAY_DATABASE_URL` once pointed at the other project's
+  host with Relay's database name — a database that exists only on
+  the first — so every Postgres test silently skipped and still
+  reported success. `CLAUDE.local.md` has the table.
 - **`RELAY_TEST_DATABASE_URL` points at the DIRECT host, not the
   pooler.** The suite drops and recreates the schema, and a
   transaction-mode pooler keeps server-side prepared statements across
@@ -295,13 +300,13 @@ Run it: `npm run tauri dev`, or the built binary at
   for the conformance suite, which drops the schema every run. Never
   aim it at `relay`; the suite now refuses a database whose name has no
   `test` in it, after a run wiped the real one.
-- The verified Resend sending domain is **REDACTED-mail-domain**; use
-  something like `relay@REDACTED-mail-domain` for `RELAY_MAIL_FROM`.
-  `delivered@resend.dev` is Resend's sink — send test mail there, never
-  to a real person.
-- Neon CLI authenticated as profile `agent`. `neon profile create agent --mint`
-  is how it got there; project settings → Credentials issues S3 keys, not
-  management keys.
+- **`RELAY_MAIL_FROM` must be on a domain verified with Resend**, or
+  every send is refused. The verified one is in `CLAUDE.local.md`.
+  `delivered@resend.dev` is Resend's own sink — send test mail there,
+  never to a real person.
+- The Neon CLI is authenticated; `CLAUDE.local.md` says as what. Note
+  that project settings → Credentials issues S3 keys, not management
+  keys.
 - Quote URLs with query strings in env files, or `. .env` dies on the `&`.
 - Postman 11 installed at `~/.local/share/Postman` for comparison.
 

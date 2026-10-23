@@ -30,3 +30,8 @@ apps/desktop/src-tauri/target
 /data
 coverage
 .DS_Store
+
+# Local environment notes: hostnames, project ids, account names. The
+# repository is public; these say where the infrastructure actually is.
+CLAUDE.local.md
+*.local.md
