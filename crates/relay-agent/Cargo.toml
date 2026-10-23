@@ -16,6 +16,17 @@ thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 futures-util.workspace = true
+# The official Rust MCP SDK. Hand-rolling JSON-RPC framing, the stdio
+# child-process transport and the initialize handshake would be a few
+# hundred lines of protocol nobody should write twice.
+#
+# `server` is off: Relay is a client of other people's MCP servers, not
+# one itself. `transport-child-process` is what runs a local server;
+# `transport-streamable-http-client` reaches a remote one.
+rmcp = { version = "3.7", default-features = false, features = [
+    "client",
+    "transport-child-process",
+] }
 reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "rustls"] }
 
 [dev-dependencies]

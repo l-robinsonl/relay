@@ -37,7 +37,7 @@ Phases 1–3 complete. Phase 4 mostly. Phase 5 part-done.
 | Invitations | workspace + role, bound to the invited address, admin-only, revocable; `invite` signup mode now works |
 | Members UI | invite, change a role, remove, withdraw an invitation — all from the Sync dialog |
 | Joining | an invitee pastes the link, picks a password, and lands in the workspace with its contents |
-| Assistant | `relay-agent` loop + nine tools + persistence + a docked chat panel with inline approval (Ctrl+J). Verified against a real model. **No MCP yet** |
+| Assistant | `relay-agent` loop + nine tools + persistence + docked chat panel (Ctrl+J) + settings. MCP over **stdio**; HTTP transport not wired. Verified against a real model |
 | Packaging (server) | Dockerfile + compose, unprivileged, healthcheck; CI builds and smoke-tests the image |
 
 | Not built | |
@@ -163,6 +163,19 @@ Run it: `npm run tauri dev`, or the built binary at
   wrote. `list_environments` reports names and the secret flag, never
   values; `get_request` redacts credential-shaped headers. Both have
   tests in `crates/relay-app/tests/assistant_tools.rs`.
+- **An MCP tool is always `ToolRisk::Send`.** Relay cannot know what
+  someone else's tool does. The protocol has hints (`readOnlyHint` and
+  friends) but they are written by the same server being asked to
+  behave, so letting them decide whether to ask the person is trusting
+  the wrong party.
+- **MCP over HTTP is not wired, deliberately.** `rmcp`'s reqwest-backed
+  streamable-HTTP transport would not resolve `StreamableHttpClient`
+  against this workspace's feature set, and the feature graph looked
+  correct (`__reqwest`, `reqwest`, `client-side-sse` all enabled, same
+  reqwest 0.13.5 in both). Rather than ship a transport that
+  half-works, `connect` returns a message naming the limit. stdio —
+  which is how most local MCP servers run — works and is tested
+  against a real child process. Worth another look with a later rmcp.
 - **Approval is a parked channel, and silence means no.** The loop is
   in Rust, the question is in a window. `AskTheUser` parks on a
   oneshot, the interface is told, and `assistant_approve` resolves it.

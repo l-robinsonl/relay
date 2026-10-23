@@ -28,11 +28,13 @@
 #[path = "loop_.rs"]
 pub mod agent_loop;
 pub mod error;
+pub mod mcp;
 pub mod provider;
 pub mod tool;
 
 pub use agent_loop::{Agent, Approval, ApproveEverything, Approver, Progress, Silent, Turn};
 pub use error::{AgentError, AgentResult};
+pub use mcp::{McpConnection, McpServer};
 pub use provider::{
     AnthropicProvider, CompletionRequest, CompletionResponse, Message, ModelProvider,
     OpenAiProvider, Role, StopReason,
