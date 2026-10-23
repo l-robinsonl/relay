@@ -12,8 +12,8 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::Response;
 use relay_models::Timestamp;
 use relay_sync::{
-    ApplyResult, ChangePage, InvitationView, LoginRequest, LoginResponse, MemberView, Membership,
-    MutationBatch, Role, UserProfile,
+    ApplyResult, ChangePage, InvitationOffer, InvitationView, LoginRequest, LoginResponse,
+    MemberView, Membership, MutationBatch, Role, UserProfile,
 };
 use serde::{Deserialize, Serialize};
 
@@ -242,20 +242,6 @@ pub async fn revoke_invitation(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// What the holder of a token is shown before accepting.
-#[derive(Debug, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct OfferView {
-    /// Which workspace.
-    pub workspace_id: String,
-    /// Its name, so the page can say what is on offer.
-    pub workspace_name: String,
-    /// The address it was sent to.
-    pub email: String,
-    /// The role it grants.
-    pub role: Role,
-}
-
 /// `GET /v1/invitations/{token}`
 ///
 /// Unauthenticated on purpose: the recipient may not have an account
@@ -263,7 +249,7 @@ pub struct OfferView {
 pub async fn invitation_offer(
     State(state): State<AppState>,
     Path(token): Path<String>,
-) -> ServerResult<Json<OfferView>> {
+) -> ServerResult<Json<InvitationOffer>> {
     let offer = state
         .store
         .invitation_offer(&auth::hash_token(&token), Timestamp::now().as_millis())
@@ -272,7 +258,7 @@ pub async fn invitation_offer(
             ServerError::BadRequest("that invitation has expired or has already been used".into())
         })?;
 
-    Ok(Json(OfferView {
+    Ok(Json(InvitationOffer {
         workspace_id: offer.workspace_id,
         workspace_name: offer.workspace_name,
         email: offer.email,

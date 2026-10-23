@@ -14,5 +14,5 @@ pub use client::{ServerHealth, SyncClient};
 // dependency on relay-sync; those command wrappers should only ever
 // need what relay-app exposes.
 pub use engine::{Resolution, SyncEngine, SyncOutcome, initial_state};
-pub use relay_sync::{InvitationView, MemberView, Role, UserProfile};
+pub use relay_sync::{InvitationOffer, InvitationView, MemberView, Role, UserProfile};
 pub use watcher::{WatchEvent, Watcher};

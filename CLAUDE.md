@@ -36,6 +36,7 @@ Phases 1–3 complete. Phase 4 mostly. Phase 5 part-done.
 | Accounts | register from the app, e-mail confirmation, password reset, single-use hashed tokens, Resend or log-only |
 | Invitations | workspace + role, bound to the invited address, admin-only, revocable; `invite` signup mode now works |
 | Members UI | invite, change a role, remove, withdraw an invitation — all from the Sync dialog |
+| Joining | an invitee pastes the link, picks a password, and lands in the workspace with its contents |
 | Packaging (server) | Dockerfile + compose, unprivileged, healthcheck; CI builds and smoke-tests the image |
 
 | Not built | |
@@ -140,6 +141,12 @@ Run it: `npm run tauri dev`, or the built binary at
   `cargo test --workspace`, and CI's drift check could not have caught
   a stale one. relay-sync and relay-script are in the list now; add any
   new crate that derives `TS`.
+- **Build the client path in the same breath as the server one.**
+  Twice now a feature has been finished server-side, tested over HTTP,
+  and shipped with no way for the application to reach it — e-mailed
+  links pointing at routes that did not exist, then invitations the
+  client could not present. Both read as complete from the test suite.
+  If a flow sends a person somewhere, follow them there.
 - **An invitation is bound to the address it was sent to.** Not just
   to its token. E-mails get forwarded, and a token-only check would
   turn a forwarded invitation into access to someone else's workspace.

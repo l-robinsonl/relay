@@ -113,6 +113,21 @@ pub struct InvitationView {
     pub expires_at: Timestamp,
 }
 
+/// What the holder of an invitation token is shown before accepting.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct InvitationOffer {
+    /// Which workspace it grants access to.
+    pub workspace_id: String,
+    /// Its name, so the invitee knows what they are joining.
+    pub workspace_name: String,
+    /// The address it was sent to. It admits nobody else.
+    pub email: String,
+    /// The role it grants.
+    pub role: Role,
+}
+
 /// Credentials submitted to sign in.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]

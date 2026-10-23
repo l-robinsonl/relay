@@ -116,7 +116,9 @@ command palette, keyboard shortcuts throughout, and local request history.
 
 **Invitations and members** — from inside Relay, a workspace
 administrator can see who has access, change what they may do, remove
-them, and invite someone new by address and role. An invitation is bound to the
+them, and invite someone new by address and role. Whoever is invited
+pastes the link they were sent, chooses a password, and arrives in the
+workspace with its contents already there. An invitation is bound to the
 address it was sent to, so a forwarded message does not become access;
 it expires after a week and can be withdrawn. A server set to
 invite-only lets nobody register without one.

@@ -10,6 +10,8 @@ vi.mock('@/services/ipc', () => ({
     syncRegister: vi.fn(),
     syncRequestVerification: vi.fn(),
     syncRequestPasswordReset: vi.fn(),
+    syncInvitationOffer: vi.fn(),
+    syncJoinInvited: vi.fn(),
     syncStatus: vi.fn().mockResolvedValue({ connected: false }),
     onSyncChanged: vi.fn().mockResolvedValue(() => {}),
   },
@@ -47,7 +49,7 @@ describe('SyncSettings', () => {
     // Before this there was no way to register from the application at
     // all: you needed the HTTP API or an administrator.
     const wrapper = await panel()
-    expect(wrapper.text()).toContain('Create one')
+    expect(wrapper.text()).toContain('Create an account')
   })
 
   it('asks for a display name only when registering', async () => {
@@ -137,5 +139,86 @@ describe('SyncSettings', () => {
 
     await wrapper.findAll('[role="tab"]')[1]!.trigger('click')
     expect(wrapper.text()).not.toContain('already exists on the server')
+  })
+
+  it('offers a way in for someone who was invited', async () => {
+    // Without this the invitation e-mail tells people to open Relay and
+    // sign in, and on an invite-only server registration refuses them.
+    const wrapper = await panel()
+    expect(wrapper.text()).toContain('I was invited')
+  })
+
+  it('shows what the invitation grants before asking for a password', async () => {
+    mocked.syncInvitationOffer.mockResolvedValue({
+      workspaceId: 'w1',
+      workspaceName: 'Marketing API',
+      email: 'grace@example.com',
+      role: 'editor',
+    })
+
+    const wrapper = await panel()
+    await wrapper.findAll('[role="tab"]')[2]!.trigger('click')
+    await wrapper.find('#sync-invite').setValue('https://relay.test/invite?token=abc')
+    await wrapper.find('#sync-invite').trigger('blur')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Marketing API')
+    expect(wrapper.text()).toContain('grace@example.com')
+    expect(wrapper.text()).toContain('editor')
+  })
+
+  it('does not ask an invitee for their address', async () => {
+    // The invitation decides it, and a field they could change would
+    // only produce a refusal they do not understand.
+    const wrapper = await panel()
+    await wrapper.findAll('[role="tab"]')[2]!.trigger('click')
+    expect(wrapper.find('#sync-email').exists()).toBe(false)
+  })
+
+  it('will not join until the invitation has been read', async () => {
+    const wrapper = await panel()
+    await wrapper.findAll('[role="tab"]')[2]!.trigger('click')
+    await wrapper.find('#sync-password').setValue('correct horse battery')
+
+    const join = wrapper.findAll('button').find((b) => b.text().includes('Join'))!
+    expect(join.attributes('disabled')).toBeDefined()
+  })
+
+  it('passes the whole pasted link through, not a token it parsed itself', async () => {
+    // Extraction happens in Rust, where it is tested. Doing it twice
+    // means two behaviours to keep in step.
+    mocked.syncInvitationOffer.mockResolvedValue({
+      workspaceId: 'w1',
+      workspaceName: 'Marketing API',
+      email: 'grace@example.com',
+      role: 'editor',
+    })
+    mocked.syncJoinInvited.mockResolvedValue({
+      id: 'w1',
+      name: 'Marketing API',
+      description: '',
+      variables: [],
+      sortOrder: 0,
+      createdAt: 1,
+      updatedAt: 1,
+      rev: 0,
+      dirty: false,
+    })
+
+    const wrapper = await panel()
+    await wrapper.findAll('[role="tab"]')[2]!.trigger('click')
+    await wrapper.find('#sync-invite').setValue('https://relay.test/invite?token=abc')
+    await wrapper.find('#sync-invite').trigger('blur')
+    await flushPromises()
+    await wrapper.find('#sync-password').setValue('correct horse battery')
+    await wrapper.findAll('button').find((b) => b.text().includes('Join'))!.trigger('click')
+    await flushPromises()
+
+    expect(mocked.syncJoinInvited).toHaveBeenCalledWith(
+      'https://relay.test',
+      'https://relay.test/invite?token=abc',
+      'correct horse battery',
+      '',
+    )
   })
 })

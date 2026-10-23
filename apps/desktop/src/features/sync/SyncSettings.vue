@@ -26,10 +26,16 @@ const connecting = ref(false)
 const health = ref<ServerHealth | null>(null)
 const probeError = ref<string | null>(null)
 
-/** Signing in to an account, or making one. */
-const mode = ref<'signIn' | 'register'>('signIn')
+/** Signing in, making an account, or arriving with an invitation. */
+const mode = ref<'signIn' | 'register' | 'invited'>('signIn')
+
+/** The link or token pasted out of an invitation e-mail. */
+const invitation = ref('')
+const offer = ref<import('@relay/shared-types').InvitationOffer | null>(null)
+const offerError = ref<string | null>(null)
+const checkingOffer = ref(false)
 const displayName = ref('')
-const busy = ref<'' | 'register' | 'verify' | 'reset'>('')
+const busy = ref<'' | 'register' | 'verify' | 'reset' | 'join'>('')
 const notice = ref<string | null>(null)
 const authError = ref<string | null>(null)
 /** Set when the server says the address is registered but unconfirmed. */
@@ -59,6 +65,10 @@ const canRegister = computed(
   () => health.value !== null && email.value.trim() !== '' && password.value.length >= 12,
 )
 
+// The address comes from the invitation, not from the person accepting,
+// so there is no e-mail field to fill in here.
+const canJoin = computed(() => offer.value !== null && password.value !== '')
+
 watch(
   () => props.open,
   (isOpen) => {
@@ -71,6 +81,9 @@ watch(
     probeError.value = null
     mode.value = 'signIn'
     unverified.value = false
+    invitation.value = ''
+    offer.value = null
+    offerError.value = null
     resetFeedback()
   },
 )
@@ -151,6 +164,44 @@ async function resendVerification () {
   try {
     await api.syncRequestVerification(serverUrl.value.trim(), email.value.trim())
     notice.value = 'If that address has an account, another link is on its way.'
+  } catch (error) {
+    authError.value = messageOf(error)
+  } finally {
+    busy.value = ''
+  }
+}
+
+/** Reads what the pasted invitation offers, so it can be shown first. */
+async function checkInvitation () {
+  const pasted = invitation.value.trim()
+  offer.value = null
+  offerError.value = null
+  if (pasted === '') return
+
+  checkingOffer.value = true
+  try {
+    offer.value = await api.syncInvitationOffer(serverUrl.value.trim(), pasted)
+  } catch (error) {
+    offerError.value = messageOf(error)
+  } finally {
+    checkingOffer.value = false
+  }
+}
+
+async function joinInvited () {
+  busy.value = 'join'
+  resetFeedback()
+  try {
+    const joined = await api.syncJoinInvited(
+      serverUrl.value.trim(),
+      invitation.value.trim(),
+      password.value,
+      displayName.value.trim(),
+    )
+    password.value = ''
+    await workspace.loadWorkspaces()
+    await workspace.select(joined.id)
+    emit('close')
   } catch (error) {
     authError.value = messageOf(error)
   } finally {
@@ -321,8 +372,9 @@ async function disconnect () {
               <div class="flex gap-1 rounded-md border border-subtle p-0.5" role="tablist">
                 <button
                   v-for="item in [
-                    { id: 'signIn', label: 'I have an account' },
-                    { id: 'register', label: 'Create one' },
+                    { id: 'signIn', label: 'Sign in' },
+                    { id: 'register', label: 'Create an account' },
+                    { id: 'invited', label: 'I was invited' },
                   ]"
                   :key="item.id"
                   type="button"
@@ -334,13 +386,54 @@ async function disconnect () {
                       : 'text-muted hover:text-secondary'
                   "
                   :aria-selected="mode === item.id"
-                  @click="mode = item.id as 'signIn' | 'register'; resetFeedback()"
+                  @click="mode = item.id as typeof mode; resetFeedback()"
                 >
                   {{ item.label }}
                 </button>
               </div>
 
-              <div>
+              <template v-if="mode === 'invited'">
+                <div>
+                  <label for="sync-invite" class="mb-1 block text-xs font-medium text-secondary">
+                    Invitation link
+                  </label>
+                  <input
+                    id="sync-invite"
+                    v-model="invitation"
+                    class="input input-mono"
+                    placeholder="Paste the whole link from the e-mail"
+                    spellcheck="false"
+                    autocomplete="off"
+                    @blur="checkInvitation"
+                    @keydown.enter.prevent="checkInvitation"
+                  />
+                  <p v-if="checkingOffer" class="mt-1.5 text-xs text-muted">Checking…</p>
+                  <p
+                    v-else-if="offerError"
+                    class="mt-1.5 text-xs"
+                    :style="{ color: 'var(--danger)' }"
+                  >
+                    {{ offerError }}
+                  </p>
+                </div>
+
+                <!-- What is actually on offer, shown before they commit
+                     to it rather than after. -->
+                <div
+                  v-if="offer"
+                  class="rounded-md border p-2.5 text-xs"
+                  :style="{ borderColor: 'var(--accent)', color: 'var(--text-secondary)' }"
+                >
+                  You have been invited to <strong>{{ offer.workspaceName }}</strong>
+                  as {{ offer.role }}, at <strong>{{ offer.email }}</strong>.
+                  <span class="mt-1 block text-muted">
+                    That address is the one the invitation admits. Set a password below
+                    — if you already have an account, use the one you have.
+                  </span>
+                </div>
+              </template>
+
+              <div v-else>
                 <label for="sync-email" class="mb-1 block text-xs font-medium text-secondary">
                   E-mail
                 </label>
@@ -354,7 +447,7 @@ async function disconnect () {
                 />
               </div>
 
-              <div v-if="mode === 'register'">
+              <div v-if="mode === 'register' || mode === 'invited'">
                 <label for="sync-name" class="mb-1 block text-xs font-medium text-secondary">
                   Display name <span class="font-normal text-muted">(optional)</span>
                 </label>
@@ -466,7 +559,17 @@ async function disconnect () {
               </div>
 
               <button
-                v-if="mode === 'register'"
+                v-if="mode === 'invited'"
+                type="button"
+                class="btn btn-primary w-full text-xs"
+                :disabled="!canJoin || busy !== ''"
+                @click="joinInvited"
+              >
+                <Loader2 v-if="busy === 'join'" :size="13" class="animate-spin" />
+                Join {{ offer ? offer.workspaceName : 'the workspace' }}
+              </button>
+              <button
+                v-else-if="mode === 'register'"
                 type="button"
                 class="btn btn-primary w-full text-xs"
                 :disabled="!canRegister || busy !== ''"

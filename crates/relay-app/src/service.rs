@@ -1169,6 +1169,7 @@ impl RelayService {
         email: String,
         password: String,
         display_name: String,
+        invitation: Option<String>,
     ) -> RelayResult<relay_sync::UserProfile> {
         let client = SyncClient::new(&server_url)?;
         client.health().await?;
@@ -1179,7 +1180,107 @@ impl RelayService {
             display_name
         };
 
-        client.register(&email, &password, &display_name).await
+        client
+            .register(&email, &password, &display_name, invitation.as_deref())
+            .await
+    }
+
+    /// Reads what an invitation offers, without accepting it.
+    pub async fn sync_invitation_offer(
+        &self,
+        server_url: String,
+        token: String,
+    ) -> RelayResult<relay_sync::InvitationOffer> {
+        SyncClient::new(&server_url)?
+            .invitation_offer(&extract_invitation_token(&token))
+            .await
+    }
+
+    /// Joins the workspace an invitation names, end to end.
+    ///
+    /// One call because it is one intention. Signing in, accepting,
+    /// creating the local workspace and connecting it are four steps
+    /// that are useless apart, and leaving the interface to sequence
+    /// them means every partial failure becomes a state a person has to
+    /// understand and unpick.
+    pub async fn sync_join_invited(
+        &self,
+        server_url: String,
+        invitation: String,
+        password: String,
+        display_name: String,
+    ) -> RelayResult<Workspace> {
+        let token = extract_invitation_token(&invitation);
+        let client = SyncClient::new(&server_url)?;
+        client.health().await?;
+
+        // What is on offer, and crucially which address it is for: the
+        // invitation decides that, not the person accepting.
+        let offer = client.invitation_offer(&token).await?;
+
+        // An existing account signs in; a new one registers with the
+        // invitation, which is also what gets past an invite-only
+        // server. Which of the two applies is not something to make
+        // somebody choose when the server already knows.
+        let session = match client.login(&offer.email, &password).await {
+            Ok(session) => session,
+            Err(error) if error.kind == ErrorKind::Forbidden => {
+                let display_name = if display_name.trim().is_empty() {
+                    offer.email.split('@').next().unwrap_or("User").to_string()
+                } else {
+                    display_name
+                };
+
+                client
+                    .register(&offer.email, &password, &display_name, Some(&token))
+                    .await?;
+
+                // Registering with the invitation already joined them.
+                return self
+                    .adopt_invited_workspace(&server_url, &offer, &client, &password)
+                    .await;
+            }
+            Err(error) => return Err(error),
+        };
+
+        client.accept_invitation(&session.token, &token).await?;
+        self.adopt_invited_workspace(&server_url, &offer, &client, &password)
+            .await
+    }
+
+    /// Creates the local workspace an invitation points at and connects it.
+    async fn adopt_invited_workspace(
+        &self,
+        server_url: &str,
+        offer: &relay_sync::InvitationOffer,
+        _client: &SyncClient,
+        password: &str,
+    ) -> RelayResult<Workspace> {
+        // The local workspace must carry the server's id, or the join
+        // would publish a second, empty workspace beside the real one.
+        let workspace = Workspace {
+            id: WorkspaceId::from(offer.workspace_id.clone()),
+            name: offer.workspace_name.clone(),
+            ..Workspace::new(offer.workspace_name.clone())
+        };
+
+        let saved = workspace.clone();
+        self.db
+            .call(move |c| WorkspaceRepo::save(c, &saved))
+            .await?;
+
+        self.sync_connect(
+            workspace.id.clone(),
+            server_url.to_string(),
+            offer.email.clone(),
+            password.to_string(),
+            // Adopt the server's copy rather than publishing this empty
+            // one over the top of it.
+            true,
+        )
+        .await?;
+
+        Ok(workspace)
     }
 
     /// Asks a server to send another confirmation e-mail.
@@ -1490,5 +1591,67 @@ impl ScopeData {
             folder_chain: self.folder_chain.iter().collect(),
             environment: self.environment.as_ref(),
         }
+    }
+}
+
+/// Pulls the token out of whatever the invitee pasted.
+///
+/// People paste the whole link, because that is what they were given.
+/// Asking them to find the part after `token=` is a pointless step that
+/// some of them will get wrong.
+fn extract_invitation_token(pasted: &str) -> String {
+    let pasted = pasted.trim();
+
+    match pasted.split_once("token=") {
+        Some((_, rest)) => rest
+            .split(['&', '#', ' '])
+            .next()
+            .unwrap_or(rest)
+            .to_string(),
+        None => pasted.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod invitation_tests {
+    use super::extract_invitation_token;
+
+    #[test]
+    fn the_whole_link_works_because_that_is_what_people_paste() {
+        assert_eq!(
+            extract_invitation_token("https://sync.example.com/invite?token=abc123"),
+            "abc123"
+        );
+    }
+
+    #[test]
+    fn a_bare_token_works_too() {
+        assert_eq!(extract_invitation_token("abc123"), "abc123");
+    }
+
+    #[test]
+    fn surrounding_rubbish_is_trimmed() {
+        // Copied out of an e-mail, a link often brings whitespace, a
+        // trailing fragment, or another parameter with it.
+        assert_eq!(
+            extract_invitation_token("  https://sync.example.com/invite?token=abc123  "),
+            "abc123"
+        );
+        assert_eq!(
+            extract_invitation_token("https://x/invite?token=abc123&utm_source=mail"),
+            "abc123"
+        );
+        assert_eq!(
+            extract_invitation_token("https://x/invite?token=abc123#top"),
+            "abc123"
+        );
+    }
+
+    #[test]
+    fn a_token_is_not_invented_from_a_link_without_one() {
+        assert_eq!(
+            extract_invitation_token("https://sync.example.com/invite"),
+            "https://sync.example.com/invite"
+        );
     }
 }

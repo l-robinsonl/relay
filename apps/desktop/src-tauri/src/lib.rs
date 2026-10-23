@@ -102,6 +102,8 @@ pub fn run() {
             commands::export_curl,
             commands::sync_probe,
             commands::sync_register,
+            commands::sync_invitation_offer,
+            commands::sync_join_invited,
             commands::sync_members,
             commands::sync_set_member_role,
             commands::sync_remove_member,

@@ -121,6 +121,7 @@ impl SyncClient {
         email: &str,
         password: &str,
         display_name: &str,
+        invitation: Option<&str>,
     ) -> RelayResult<UserProfile> {
         let response = self
             .http
@@ -129,6 +130,9 @@ impl SyncClient {
                 "email": email,
                 "password": password,
                 "displayName": display_name,
+                // An invite-only server refuses registration without
+                // this, which is most of the point of invite-only.
+                "invitation": invitation,
             }))
             .send()
             .await
@@ -184,6 +188,42 @@ impl SyncClient {
         let response = self
             .http
             .get(format!("{}/v1/auth/me", self.base_url))
+            .bearer_auth(token)
+            .send()
+            .await
+            .map_err(transport_error)?;
+
+        parse(response).await
+    }
+
+    /// Describes an invitation without accepting it.
+    ///
+    /// Needs no credentials: whoever holds the token is entitled to see
+    /// what they have been offered, and will not have an account yet if
+    /// the invitation is the reason they are here.
+    pub async fn invitation_offer(&self, token: &str) -> RelayResult<relay_sync::InvitationOffer> {
+        let response = self
+            .http
+            .get(format!("{}/v1/invitations/{token}", self.base_url))
+            .send()
+            .await
+            .map_err(transport_error)?;
+
+        parse(response).await
+    }
+
+    /// Accepts an invitation as the signed-in user.
+    pub async fn accept_invitation(
+        &self,
+        token: &str,
+        invitation: &str,
+    ) -> RelayResult<relay_sync::Membership> {
+        let response = self
+            .http
+            .post(format!(
+                "{}/v1/invitations/{invitation}/accept",
+                self.base_url
+            ))
             .bearer_auth(token)
             .send()
             .await

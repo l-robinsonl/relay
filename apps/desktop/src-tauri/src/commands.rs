@@ -675,9 +675,34 @@ pub async fn sync_register(
     email: String,
     password: String,
     display_name: String,
+    invitation: Option<String>,
 ) -> RelayResult<relay_app::sync::UserProfile> {
     service
-        .sync_register(server_url, email, password, display_name)
+        .sync_register(server_url, email, password, display_name, invitation)
+        .await
+}
+
+/// Describes an invitation without accepting it.
+#[tauri::command]
+pub async fn sync_invitation_offer(
+    service: State<'_, RelayService>,
+    server_url: String,
+    token: String,
+) -> RelayResult<relay_app::sync::InvitationOffer> {
+    service.sync_invitation_offer(server_url, token).await
+}
+
+/// Joins the workspace an invitation names, signing in or registering.
+#[tauri::command]
+pub async fn sync_join_invited(
+    service: State<'_, RelayService>,
+    server_url: String,
+    invitation: String,
+    password: String,
+    display_name: String,
+) -> RelayResult<Workspace> {
+    service
+        .sync_join_invited(server_url, invitation, password, display_name)
         .await
 }
 

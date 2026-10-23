@@ -8,6 +8,7 @@ import type {
   HttpExchange,
   ImportReport,
   OAuth2Config,
+  InvitationOffer,
   InvitationView,
   MemberView,
   RelayError,
@@ -270,7 +271,24 @@ export const api = {
     email: string,
     password: string,
     displayName: string,
-  ) => call<UserProfile>('sync_register', { serverUrl, email, password, displayName }),
+    invitation?: string | null,
+  ) =>
+    call<UserProfile>('sync_register', {
+      serverUrl,
+      email,
+      password,
+      displayName,
+      invitation: invitation ?? null,
+    }),
+  syncInvitationOffer: (serverUrl: string, token: string) =>
+    call<InvitationOffer>('sync_invitation_offer', { serverUrl, token }),
+  syncJoinInvited: (
+    serverUrl: string,
+    invitation: string,
+    password: string,
+    displayName: string,
+  ) =>
+    call<Workspace>('sync_join_invited', { serverUrl, invitation, password, displayName }),
   syncRequestVerification: (serverUrl: string, email: string) =>
     call<void>('sync_request_verification', { serverUrl, email }),
   syncRequestPasswordReset: (serverUrl: string, email: string) =>

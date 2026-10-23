@@ -19,6 +19,9 @@ use relay_storage::{Database, SyncRepo};
 struct Server {
     base: String,
     handle: tokio::task::JoinHandle<()>,
+    /// What the server tried to e-mail, so a test can read a link out
+    /// of it the way a recipient would.
+    mail: Arc<relay_server::mail::CapturingMailer>,
 }
 
 impl Drop for Server {
@@ -48,7 +51,8 @@ async fn start_server() -> Server {
         require_verified_email: false,
     };
 
-    let state = AppState::new(Arc::new(store), config);
+    let mail = Arc::new(relay_server::mail::CapturingMailer::new());
+    let state = AppState::with_mailer(Arc::new(store), config, mail.clone());
     let handle = tokio::spawn(async move {
         let _ = axum::serve(listener, router(state)).await;
     });
@@ -56,6 +60,7 @@ async fn start_server() -> Server {
     Server {
         base: format!("http://{addr}"),
         handle,
+        mail,
     }
 }
 
@@ -719,4 +724,108 @@ async fn a_local_only_workspace_gets_no_watcher_and_that_is_not_an_error() {
 
     // Running without a server is the ordinary case, not a failure.
     assert!(watcher.is_none());
+}
+
+/// A desktop installation with no workspace at all — somebody who has
+/// just been sent an invitation and has nothing else.
+async fn bare_client() -> RelayService {
+    RelayService::new(
+        Database::open_in_memory().unwrap(),
+        HttpEngine::with_defaults(),
+        Arc::new(MemorySecretStore::new()),
+    )
+}
+
+#[tokio::test]
+async fn an_invited_person_joins_a_shared_workspace_from_the_application() {
+    // The whole path a recipient actually takes: paste the link, give a
+    // password, end up inside the workspace with the other person's
+    // work already there. Every piece of this existed and the
+    // application could not drive any of it.
+    let server = start_server().await;
+
+    // Ada registers, creates a workspace and puts something in it.
+    let ada = Client::new("shared-ws", "Marketing API").await;
+    ada.service
+        .sync_register(
+            server.base.clone(),
+            "ada@example.com".into(),
+            "correct horse battery".into(),
+            "Ada".into(),
+            None,
+        )
+        .await
+        .unwrap();
+    ada.service
+        .sync_connect(
+            ada.workspace.clone(),
+            server.base.clone(),
+            "ada@example.com".into(),
+            "correct horse battery".into(),
+            false,
+        )
+        .await
+        .unwrap();
+
+    let mut doc = ada
+        .service
+        .request_create(ada.workspace.clone(), "Health".into(), None)
+        .await
+        .unwrap();
+    doc.url = "https://api.example.com/health".into();
+    ada.service.request_save(doc).await.unwrap();
+    ada.service.sync_now(ada.workspace.clone()).await.unwrap();
+
+    // She invites Grace as an editor.
+    let invitation = ada
+        .service
+        .sync_invite(
+            ada.workspace.clone(),
+            "grace@example.com".into(),
+            relay_sync::Role::Editor,
+        )
+        .await
+        .unwrap();
+    assert_eq!(invitation.email, "grace@example.com");
+
+    // The token only reaches a real invitee by e-mail; here it is read
+    // out of the server's own record of what it sent.
+    let token = server.mail.last().expect("an invitation e-mail");
+    let link = token
+        .body
+        .split_whitespace()
+        .find(|w| w.contains("token="))
+        .expect("a link in the message")
+        .to_string();
+
+    // Grace, with nothing but the link and a password she chooses.
+    let grace = bare_client().await;
+    let offer = grace
+        .sync_invitation_offer(server.base.clone(), link.clone())
+        .await
+        .unwrap();
+    assert_eq!(offer.workspace_name, "Marketing API");
+    assert_eq!(offer.email, "grace@example.com");
+
+    let joined = grace
+        .sync_join_invited(
+            server.base.clone(),
+            link,
+            "a different passphrase".into(),
+            String::new(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        joined.id.as_str(),
+        "shared-ws",
+        "joined a different workspace"
+    );
+
+    // And Ada's request is there, which is the point of having joined.
+    grace.sync_now(joined.id.clone()).await.unwrap();
+    let requests = grace.request_list(joined.id.clone()).await.unwrap();
+    assert_eq!(requests.len(), 1, "{requests:?}");
+    assert_eq!(requests[0].name, "Health");
 }
