@@ -155,6 +155,10 @@ All of it is under `/v1`, with `/health` outside for load balancers.
 | `GET` | `/v1/workspaces/{id}/members` | viewer |
 | `PUT`/`DELETE` | `/v1/workspaces/{id}/members/{userId}` | admin |
 | `GET` | `/v1/workspaces/{id}/ws` | viewer |
+| `GET` | `/v1/workspaces/{id}/billing` | viewer |
+| `POST` | `/v1/workspaces/{id}/billing/checkout` | admin |
+| `POST` | `/v1/workspaces/{id}/billing/portal` | admin |
+| `POST` | `/v1/billing/webhook` | Stripe, by signature |
 
 Authentication is a bearer token from `/v1/auth/login`.
 
@@ -263,6 +267,55 @@ logged with the provider's own explanation.
   address returns exactly what a known one returns, and sends nothing.
   A repeat request within a minute is silently suppressed rather than
   rate-limit-errored, because an error would itself confirm the address.
+
+## Charging for seats
+
+**A self-hosted server charges for nothing.** Leave the Stripe
+variables unset and there is no seat limit, no subscription, and the
+app shows no billing anywhere — not a disabled panel, nothing. The
+three `/billing` routes answer that this server does not charge.
+
+Charging needs all three of:
+
+| | |
+|---|---|
+| `STRIPE_SECRET_KEY` | `sk_test_…` or `sk_live_…` |
+| `STRIPE_WEBHOOK_SECRET` | `whsec_…`, shown when the endpoint is created |
+| `STRIPE_PRICE_SEAT_ANNUAL` | `price_…`, a recurring per-unit price |
+
+All three or none. A key without a webhook secret would take payments
+and never hear that they succeeded, so the server treats a partial
+configuration as off and logs that seats will not be charged.
+
+Register the endpoint in Stripe as `/v1/billing/webhook`, subscribed to
+`checkout.session.completed` and `customer.subscription.*`. Nothing
+else is acted on; other event types are acknowledged and ignored,
+because anything but a 2xx makes Stripe retry for days.
+
+`RELAY_PUBLIC_URL` must be correct. The checkout sends the browser back
+to `{RELAY_PUBLIC_URL}/billing/done`, which this server serves.
+
+### What is enforced, and what is not
+
+Seats bind on **growth only**. Over the limit, or past due, or
+cancelled, nobody is locked out and nothing stops syncing — the people
+already in a workspace keep working, and an existing member can still
+be re-roled or removed. What is refused is admitting another person,
+by either route: sending an invitation and granting membership
+directly are both gated, in `SyncStore`, where no handler can forget. A tool that holds your API requests must not hold them hostage
+over a failed card, and `past_due` in particular means Stripe is still
+retrying a payment that will probably clear.
+
+The entitlement is a server-side decision, returned by
+`/v1/workspaces/{id}/billing` along with the sentence to show the
+person. The client does not reimplement it.
+
+### The webhook is the only thing that is trusted
+
+The endpoint is public — Stripe has to reach it — so the signature is
+the authentication. Nothing is read out of the body before the HMAC is
+checked, signatures older than five minutes are refused, and every
+event id is claimed before it is applied so a retry is a no-op.
 
 ## Invitations
 

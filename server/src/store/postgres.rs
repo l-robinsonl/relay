@@ -469,6 +469,25 @@ impl SyncStore for PostgresStore {
         self.authorise(workspace_id, &actor.user_id, Role::Admin)
             .await?;
 
+        // Seats bind on growth, so only an *addition* is checked: an
+        // existing member's role must stay changeable whatever the
+        // subscription is doing, or an over-limit workspace could not
+        // even demote someone.
+        if self.membership(workspace_id, user_id).await?.is_none() {
+            let entitlement = self.entitlement(workspace_id).await?;
+            if !entitlement.active || !entitlement.allows(self.member_count(workspace_id).await?) {
+                return Err(ServerError::LimitExceeded {
+                    limit: "seats",
+                    message: entitlement.notice.unwrap_or_else(|| {
+                        format!(
+                            "this workspace is paid for {} people. Add a seat to admit another.",
+                            entitlement.seats.unwrap_or(0)
+                        )
+                    }),
+                });
+            }
+        }
+
         let now = now_millis();
         sqlx::query(
             "INSERT INTO relay.memberships (workspace_id, user_id, role, created_at)
@@ -600,8 +619,11 @@ impl SyncStore for PostgresStore {
             .await?;
 
         // Seats bound growth and nothing else. Checked here rather
-        // than in a handler, for the same reason authorisation is:
-        // every route that adds a person goes through this.
+        // than in a handler, for the same reason authorisation is: the
+        // handler cannot forget. `upsert_membership` carries the same
+        // check — it is the other way a person joins, and gating only
+        // this one left an administrator able to add members directly
+        // and never pay for them.
         let entitlement = self.entitlement(workspace_id).await?;
         if !entitlement.active || !entitlement.allows(self.member_count(workspace_id).await?) {
             return Err(ServerError::LimitExceeded {

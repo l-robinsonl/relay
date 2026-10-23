@@ -1516,6 +1516,73 @@ async fn a_cancelled_subscription_stops_growth_only() {
 }
 
 #[tokio::test]
+async fn seats_cannot_be_skipped_by_adding_a_member_directly() {
+    // Inviting was gated from the start; adding by user id was not,
+    // so an administrator could fill a workspace without paying for
+    // any of it. There are two ways a person joins and both bind.
+    for_each_backend(|store| async move {
+        let owner = seed_user(&store, "ada@example.com").await;
+        let bob = seed_user(&store, "bob@example.com").await;
+        store.create_workspace(&owner, "w1", "Team").await.unwrap();
+        store
+            .save_subscription(&subscription("w1", SubscriptionStatus::Active, 1))
+            .await
+            .unwrap();
+
+        let refused = store
+            .upsert_membership(&owner, "w1", &bob.user_id, Role::Editor)
+            .await;
+        assert!(refused.is_err(), "a second member was admitted on one seat");
+        assert_eq!(store.member_count("w1").await.unwrap(), 1);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn an_existing_member_can_still_be_re_roled_over_the_limit() {
+    // The limit binds on growth. A workspace that has outgrown its
+    // subscription must still be able to demote or promote the people
+    // already in it — otherwise the only way out is to pay.
+    for_each_backend(|store| async move {
+        let owner = seed_user(&store, "ada@example.com").await;
+        let bob = seed_user(&store, "bob@example.com").await;
+        store.create_workspace(&owner, "w1", "Team").await.unwrap();
+        store
+            .upsert_membership(&owner, "w1", &bob.user_id, Role::Editor)
+            .await
+            .unwrap();
+
+        // Now the subscription shrinks under them.
+        store
+            .save_subscription(&subscription("w1", SubscriptionStatus::Canceled, 1))
+            .await
+            .unwrap();
+
+        store
+            .upsert_membership(&owner, "w1", &bob.user_id, Role::Viewer)
+            .await
+            .expect("an existing member could not be demoted");
+
+        assert_eq!(
+            store
+                .membership("w1", &bob.user_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .role,
+            Role::Viewer
+        );
+        // And removing someone is always allowed; it is how you get
+        // back under the limit.
+        store
+            .remove_membership(&owner, "w1", &bob.user_id)
+            .await
+            .unwrap();
+    })
+    .await;
+}
+
+#[tokio::test]
 async fn a_subscription_round_trips_including_an_unknown_status() {
     for_each_backend(|store| async move {
         let owner = seed_user(&store, "ada@example.com").await;

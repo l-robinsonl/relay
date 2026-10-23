@@ -29,6 +29,12 @@ services:
       RELAY_MAIL_FROM: ${RELAY_MAIL_FROM:-}
       RELAY_REQUIRE_VERIFIED_EMAIL: ${RELAY_REQUIRE_VERIFIED_EMAIL:-true}
       RELAY_LOG: ${RELAY_LOG:-info,sqlx=warn}
+      # Empty means this deployment charges for nothing, which is the
+      # self-hosting default. All three are needed to charge.
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+      STRIPE_PRICE_SEAT_ANNUAL: ${STRIPE_PRICE_SEAT_ANNUAL:-}
+      STRIPE_PORTAL_RETURN_URL: ${STRIPE_PORTAL_RETURN_URL:-}
     volumes:
       - relay-data:/data
     healthcheck:

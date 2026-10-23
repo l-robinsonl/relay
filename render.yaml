@@ -65,5 +65,15 @@ services:
       - key: RELAY_REQUIRE_VERIFIED_EMAIL
         value: "false"
 
+      # Leave unset and this deployment charges for nothing. All
+      # three are needed before a seat is billed; the webhook endpoint
+      # to register in Stripe is /v1/billing/webhook on this service.
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
+      - key: STRIPE_PRICE_SEAT_ANNUAL
+        sync: false
+
       - key: RELAY_LOG
         value: info,sqlx=warn
