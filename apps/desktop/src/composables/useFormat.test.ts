@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   formatBytes,
   formatDuration,
@@ -66,6 +66,13 @@ describe('formatRelativeTime', () => {
     // An invitation lapses after a week, and the members panel
     // showed every one of them as "expires just now" — which reads
     // as already gone.
+    //
+    // The clock is frozen because these are exact boundaries: read
+    // `Date.now()` here, let a millisecond pass before the function
+    // reads it again, and "in 1 day" becomes "in 23 hours". That flaked
+    // in a full run while passing six times on its own.
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-06-01T12:00:00Z'))
     const now = Date.now()
     expect(formatRelativeTime(now + 30 * 60_000)).toBe('in 30 min')
     expect(formatRelativeTime(now + 2 * 3_600_000)).toBe('in 2 hours')
@@ -73,6 +80,7 @@ describe('formatRelativeTime', () => {
     expect(formatRelativeTime(now + 6 * 86_400_000)).toBe('in 6 days')
     expect(formatRelativeTime(now + 86_400_000)).toBe('in 1 day')
     expect(formatRelativeTime(now + 60 * 86_400_000)).toContain('on ')
+    vi.useRealTimers()
   })
 })
 

@@ -61,7 +61,8 @@ function activate () {
 <template>
   <button
     type="button"
-    class="btn btn-ghost gap-1.5 px-2 py-1 text-xs"
+    class="btn gap-1.5 px-2 py-1 text-xs"
+    :class="sync.status.connected ? 'btn-ghost' : ''"
     :style="{ color: appearance.color }"
     :title="title"
     @click="activate"

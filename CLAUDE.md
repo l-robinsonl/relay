@@ -65,8 +65,21 @@ RELAY_TEST_POSTGRES_URL="$RELAY_DATABASE_URL" \
   cargo test -p relay-server --test conformance -- --test-threads=1
 ```
 
-Run it: `npm run tauri dev`, or the built binary at
+Run it: `npm run tauri dev`, or build it with
+**`npm run tauri build -- --no-bundle`** and run
 `target/release/relay-desktop`.
+
+**Never build the desktop app with plain `cargo build --release`.**
+It compiles and produces a binary at the same path, and that binary
+opens a white window reading "Could not connect to localhost:
+Connection refused" — the webview looks for the dev server because
+only the Tauri CLI marks a build as production. Nothing about the
+cargo output says anything is wrong. Go through `npm run tauri
+build`, which also runs the frontend build first.
+
+Twenty cores and a release build is enough to invoke the OOM killer
+on a 32 GB machine; `cargo build` dies with exit 137 and no further
+explanation. `CARGO_BUILD_JOBS=4` in front of it is the fix.
 
 ## Map
 

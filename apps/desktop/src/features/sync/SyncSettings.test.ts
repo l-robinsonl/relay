@@ -45,6 +45,49 @@ describe('SyncSettings', () => {
     vi.clearAllMocks()
   })
 
+  it('checks the address on its own, without a second click', async () => {
+    // The sign-in and create-account tabs only appear once the server
+    // has answered. Hiding that behind a separate "Check" button meant
+    // someone could type a perfectly good address, watch nothing
+    // happen, and conclude there was no way to sign in at all.
+    vi.useFakeTimers()
+    mocked.syncProbe.mockResolvedValue({
+      status: 'ok', backend: 'sqlite', protocol: '1', version: '0.1.0',
+    })
+
+    const wrapper = mount(SyncSettings, {
+      props: { open: true },
+      global: { stubs: { Teleport: true } },
+    })
+    await wrapper.find('#server-url').setValue('https://relay.test')
+
+    expect(mocked.syncProbe).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1000)
+    vi.useRealTimers()
+    await flushPromises()
+
+    expect(mocked.syncProbe).toHaveBeenCalledWith('https://relay.test')
+    expect(wrapper.text()).toContain('Create an account')
+  })
+
+  it('does not go looking before the address is a plausible one', async () => {
+    // Otherwise it fires a request at every keystroke of "h", "ht",
+    // "htt"...
+    vi.useFakeTimers()
+    const wrapper = mount(SyncSettings, {
+      props: { open: true },
+      global: { stubs: { Teleport: true } },
+    })
+
+    for (const partial of ['h', 'https:/', 'https://rel']) {
+      await wrapper.find('#server-url').setValue(partial)
+      await vi.advanceTimersByTimeAsync(1000)
+    }
+    vi.useRealTimers()
+
+    expect(mocked.syncProbe).not.toHaveBeenCalled()
+  })
+
   it('offers to create an account, not just sign in', async () => {
     // Before this there was no way to register from the application at
     // all: you needed the HTTP API or an administrator.

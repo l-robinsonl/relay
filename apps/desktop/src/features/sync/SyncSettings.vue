@@ -89,6 +89,22 @@ watch(
   },
 )
 
+// Typing an address is enough. The sign-in and create-account tabs
+// only appear once the server has answered, and hiding them behind a
+// separate "Check" click meant someone could type a perfectly good
+// address, see nothing happen, and conclude there was no way to sign
+// in at all.
+let probeTimer: ReturnType<typeof setTimeout> | undefined
+watch(serverUrl, (next) => {
+  clearTimeout(probeTimer)
+  health.value = null
+  probeError.value = null
+  if (!/^https?:\/\/[^\s]+\.[^\s]|^https?:\/\/localhost|^https?:\/\/127\./i.test(next.trim())) {
+    return
+  }
+  probeTimer = setTimeout(() => void probe(), 700)
+})
+
 async function probe () {
   const url = serverUrl.value.trim()
   if (!url) return
@@ -328,8 +344,13 @@ async function disconnect () {
           <!-- Not connected -->
           <div v-else class="space-y-3">
             <p class="text-xs text-muted">
-              Relay works perfectly well without a server. Connect one only if you want
-              this workspace on more than one machine, or shared with teammates.
+              Put this workspace on a server to use it from more than one machine, or
+              to share it with people you work with. Type the address and Relay will
+              offer to sign you in or create an account.
+            </p>
+            <p class="text-xs text-muted">
+              Nothing here is required — Relay is complete without a server, and
+              everything you have made stays on this machine either way.
             </p>
 
             <div>
@@ -346,6 +367,8 @@ async function disconnect () {
                   autocomplete="off"
                   @keydown.enter.prevent="probe"
                 />
+                <!-- Still here for a retry; the address is checked on its
+                     own a moment after you stop typing. -->
                 <button
                   type="button"
                   class="btn shrink-0 text-xs"
@@ -353,12 +376,16 @@ async function disconnect () {
                   @click="probe"
                 >
                   <Loader2 v-if="probing" :size="13" class="animate-spin" />
-                  Check
+                  {{ probing ? 'Checking' : 'Check' }}
                 </button>
               </div>
 
+              <p v-if="probing" class="mt-1.5 flex items-center gap-1.5 text-xs text-muted">
+                <Loader2 :size="12" class="animate-spin" />
+                Looking for a Relay server there…
+              </p>
               <p
-                v-if="health"
+                v-else-if="health"
                 class="mt-1.5 flex items-center gap-1.5 text-xs"
                 :style="{ color: 'var(--success)' }"
               >
