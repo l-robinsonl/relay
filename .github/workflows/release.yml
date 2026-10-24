@@ -1,0 +1,143 @@
+name: Release
+
+# Cutting a release:
+#
+#   git tag v0.1.0 && git push origin v0.1.0
+#
+# Builds installers on all three platforms and attaches them to a
+# GitHub Release, so somebody can download Relay and run it the way
+# they would run anything else. Building from source stays supported
+# and is what the repository README describes; this is for everyone
+# who should not have to install Rust to try an API client.
+#
+# The builds are not code-signed. macOS refuses an unsigned
+# application outright and Windows warns, which the release notes
+# below say plainly — a download that fails silently is worse than
+# one that explains itself.
+
+on:
+  push:
+    tags: ["v*"]
+  # So a release can be re-cut without moving the tag.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build (e.g. v0.1.0)"
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            name: Linux
+            # .deb for Debian and Ubuntu, .rpm for Fedora, AppImage
+            # for everyone else.
+            artifacts: |
+              apps/desktop/src-tauri/target/release/bundle/deb/*.deb
+              apps/desktop/src-tauri/target/release/bundle/rpm/*.rpm
+              apps/desktop/src-tauri/target/release/bundle/appimage/*.AppImage
+          - os: macos-latest
+            name: macOS
+            artifacts: |
+              apps/desktop/src-tauri/target/release/bundle/dmg/*.dmg
+          - os: windows-latest
+            name: Windows
+            artifacts: |
+              apps/desktop/src-tauri/target/release/bundle/msi/*.msi
+              apps/desktop/src-tauri/target/release/bundle/nsis/*.exe
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: '. -> target'
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Linux system dependencies
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+            librsvg2-dev libdbus-1-dev libsoup-3.0-dev \
+            pkg-config build-essential curl wget file
+
+      - run: npm ci
+
+      # With bundling, unlike CI's check build. This is the whole
+      # point of the workflow.
+      - name: Build the installers
+        run: npm run tauri build
+
+      - name: Collect them
+        uses: actions/upload-artifact@v4
+        with:
+          name: relay-${{ matrix.name }}
+          path: ${{ matrix.artifacts }}
+          if-no-files-found: error
+
+  publish:
+    name: Publish the release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: What was built
+        run: find artifacts -type f | sort
+
+      - name: Publish
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          files: artifacts/**/*
+          generate_release_notes: true
+          body: |
+            ## Installing
+
+            | | |
+            |---|---|
+            | **Linux** | `.deb`, `.rpm`, or the `.AppImage` — make it executable and run it |
+            | **macOS** | `.dmg` |
+            | **Windows** | `.msi`, or the `.exe` installer |
+
+            ### These builds are not code-signed
+
+            **macOS** will refuse to open the application. Right-click
+            it and choose **Open** the first time, or clear the
+            quarantine flag:
+
+            ```sh
+            xattr -dr com.apple.quarantine /Applications/Relay.app
+            ```
+
+            **Windows** will show an unknown-publisher warning: choose
+            **More info**, then **Run anyway**.
+
+            **Linux** is unaffected.
+
+            Certificates are the hold-up rather than anything in the
+            code. If you would rather not trust an unsigned build,
+            [building from source](https://github.com/l-robinsonl/relay#building)
+            takes one command.
