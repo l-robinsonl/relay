@@ -159,7 +159,7 @@ where
 
     let status = response.status();
     if !status.is_success() {
-        return Err(crate::error::EngineError::InvalidUrl(format!(
+        return Err(crate::error::EngineError::Stream(format!(
             "the endpoint answered {status}"
         )));
     }

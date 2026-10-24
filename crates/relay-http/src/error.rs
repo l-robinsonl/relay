@@ -57,6 +57,15 @@ pub enum EngineError {
     /// The request deadline elapsed.
     #[error("request timed out after {0} ms")]
     Timeout(u64),
+
+    /// A long-lived connection could not be opened or did not survive.
+    ///
+    /// Separate from `Transport` because neither websockets nor the
+    /// events reader go through reqwest's error type, and routing them
+    /// through `InvalidUrl` — which is what the first cut did — told
+    /// the person their URL was wrong when it was not.
+    #[error("{0}")]
+    Stream(String),
 }
 
 impl EngineError {
@@ -76,6 +85,7 @@ impl EngineError {
             Self::ResponseTooLarge { .. } => (TransportErrorKind::ResponseTooLarge, None),
             Self::Io(e) => (TransportErrorKind::ResponseBodyError, Some(e.to_string())),
             Self::Timeout(_) => (TransportErrorKind::Timeout, None),
+            Self::Stream(d) => (TransportErrorKind::ConnectionFailed, Some(d.clone())),
             Self::Transport(e) => return classify_reqwest(e),
         };
 

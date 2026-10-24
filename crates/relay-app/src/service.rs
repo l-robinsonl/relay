@@ -395,11 +395,16 @@ impl RelayService {
         })
     }
 
-    /// Opens a stream and reads it until it ends or is closed.
+    /// Opens a stream and runs it until it ends or is closed.
     ///
     /// Returns as soon as the connection is handed to a task, because
-    /// the whole point is that it does not finish: events arrive
-    /// through `events` and `stream_close` is how it stops.
+    /// the whole point is that it does not finish: everything that
+    /// happens on it arrives through `events`, and `stream_close` is
+    /// how it stops.
+    ///
+    /// Which protocol is decided by the document's `kind`. An
+    /// ordinary HTTP request has no business here and is refused,
+    /// rather than quietly opened as one of the two.
     pub async fn stream_open(
         &self,
         execution_id: relay_models::ExecutionId,
@@ -407,14 +412,29 @@ impl RelayService {
         environment: Option<EnvironmentId>,
         events: Arc<dyn crate::streams::StreamSink>,
     ) -> RelayResult<()> {
+        let kind = doc.kind;
+        if !kind.streams() {
+            return Err(RelayError::invalid("this request is not a stream"));
+        }
+
         let context_data = self.load_scope(&doc, environment).await?;
         let input = context_data.as_input();
         let context = build_context(&input);
         let spec = resolve(&doc, &input, &context).spec;
 
-        let token = self.streams.register(execution_id.clone());
         let engine = self.engine.clone();
         let streams = self.streams.clone();
+
+        // Only a websocket gets a channel back. Registering one for
+        // server-sent events would make `stream_send` accept a
+        // message it could never deliver.
+        let (token, outbound) = match kind {
+            relay_models::RequestKind::WebSocket => {
+                let (token, rx) = self.streams.register_two_way(execution_id.clone());
+                (token, Some(rx))
+            }
+            _ => (self.streams.register(execution_id.clone()), None),
+        };
 
         tokio::spawn(async move {
             events.emit(crate::streams::StreamEvent::Open {
@@ -423,19 +443,27 @@ impl RelayService {
 
             let sink = events.clone();
             let id = execution_id.clone();
-            let closing = token.clone();
-
-            let outcome = relay_http::sse::stream(engine.pool(), &spec, move |event| {
+            let say = move |message: relay_models::StreamMessage| {
                 sink.emit(crate::streams::StreamEvent::Message {
                     execution_id: id.clone(),
-                    event,
+                    message,
                     at: relay_models::Timestamp::now().as_millis(),
                 });
-                // Each event is also the moment to notice that the
-                // person has pressed stop.
-                !closing.is_cancelled()
-            })
-            .await;
+            };
+
+            let outcome = match outbound {
+                Some(rx) => relay_http::websocket::connect(&spec, rx, say, token.clone()).await,
+                None => {
+                    let closing = token.clone();
+                    relay_http::sse::stream(engine.pool(), &spec, move |event| {
+                        say(event.into());
+                        // Each event is also the moment to notice that
+                        // the person has pressed stop.
+                        !closing.is_cancelled()
+                    })
+                    .await
+                }
+            };
 
             streams.forget(&execution_id);
             events.emit(crate::streams::StreamEvent::Closed {
@@ -452,6 +480,21 @@ impl RelayService {
         });
 
         Ok(())
+    }
+
+    /// Sends a message on an open websocket.
+    ///
+    /// The frame is not logged here: it is logged by the connection
+    /// task once it has actually gone out, so the transcript records
+    /// what happened rather than what was asked for.
+    pub fn stream_send(
+        &self,
+        execution_id: &relay_models::ExecutionId,
+        text: String,
+    ) -> RelayResult<()> {
+        self.streams
+            .send(execution_id, text)
+            .map_err(|e| RelayError::invalid(e.to_string()))
     }
 
     /// Closes a stream. Says whether one was open.

@@ -28,13 +28,34 @@ impl StreamSink for Collector {
 }
 
 impl Collector {
+    /// What was said, in order, with the direction written in so a
+    /// websocket transcript can be asserted on as a conversation.
+    fn transcript(&self) -> Vec<String> {
+        self.0
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|e| match e {
+                StreamEvent::Message { message, .. } => Some(format!(
+                    "{}{}",
+                    match message.direction {
+                        relay_models::StreamDirection::Inbound => "< ",
+                        relay_models::StreamDirection::Outbound => "> ",
+                    },
+                    message.data
+                )),
+                _ => None,
+            })
+            .collect()
+    }
+
     fn messages(&self) -> Vec<String> {
         self.0
             .lock()
             .unwrap()
             .iter()
             .filter_map(|e| match e {
-                StreamEvent::Message { event, .. } => Some(event.data.clone()),
+                StreamEvent::Message { message, .. } => Some(message.data.clone()),
                 _ => None,
             })
             .collect()
@@ -179,6 +200,106 @@ async fn closing_something_already_finished_is_harmless() {
     tokio::time::sleep(Duration::from_millis(300)).await;
 
     assert!(!service.stream_close(&id), "it was still registered");
+}
+
+/// An echo socket, for the two-way half.
+async fn socket_server() -> (String, tokio::task::JoinHandle<()>) {
+    use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+
+    async fn echo(mut socket: WebSocket) {
+        while let Some(Ok(message)) = socket.recv().await {
+            if let Message::Text(text) = message {
+                let _ = socket.send(Message::text(format!("echo:{text}"))).await;
+            }
+        }
+    }
+
+    let app = Router::new().route(
+        "/socket",
+        get(|ws: WebSocketUpgrade| async move { ws.on_upgrade(echo) }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let handle = tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    (format!("ws://{addr}/socket"), handle)
+}
+
+async fn a_socket(service: &RelayService, url: String) -> relay_models::RequestDoc {
+    let mut doc = a_stream(service, url).await;
+    doc.kind = RequestKind::WebSocket;
+    doc
+}
+
+#[tokio::test]
+async fn a_websocket_is_a_conversation_and_the_log_shows_both_halves() {
+    let (url, _handle) = socket_server().await;
+    let service = service();
+    let doc = a_socket(&service, url).await;
+    let events = Arc::new(Collector::default());
+    let id = ExecutionId::new();
+
+    service
+        .stream_open(id.clone(), doc, None, events.clone())
+        .await
+        .unwrap();
+
+    // The socket is opened by a task, so there is a moment before it
+    // can carry anything. This is the one place a test has to wait
+    // for that rather than for a message.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    service.stream_send(&id, "hello".into()).unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    assert_eq!(events.transcript(), ["> hello", "< echo:hello"]);
+
+    service.stream_close(&id);
+}
+
+#[tokio::test]
+async fn sending_on_server_sent_events_is_refused_rather_than_swallowed() {
+    // There is no channel back on an SSE stream. A caller told
+    // nothing would wait for a reply that cannot come.
+    let (base, _handle) = server(50, Duration::from_millis(50)).await;
+    let service = service();
+    let doc = a_stream(&service, format!("{base}/events")).await;
+    let events = Arc::new(Collector::default());
+    let id = ExecutionId::new();
+
+    service
+        .stream_open(id.clone(), doc, None, events.clone())
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let error = service
+        .stream_send(&id, "hello".into())
+        .expect_err("a one-way stream accepted a message");
+    assert!(error.to_string().contains("one-way"), "{error}");
+
+    service.stream_close(&id);
+}
+
+#[tokio::test]
+async fn sending_on_nothing_says_so() {
+    let service = service();
+    assert!(service.stream_send(&ExecutionId::new(), "x".into()).is_err());
+}
+
+#[tokio::test]
+async fn an_ordinary_request_is_not_opened_as_a_stream() {
+    // Otherwise a GET would be opened as server-sent events and sit
+    // there reading a body that is not one.
+    let service = service();
+    let mut doc = a_stream(&service, "https://example.com".into()).await;
+    doc.kind = RequestKind::Http;
+
+    let error = service
+        .stream_open(ExecutionId::new(), doc, None, Arc::new(Collector::default()))
+        .await
+        .expect_err("an HTTP request was opened as a stream");
+    assert!(error.to_string().contains("not a stream"), "{error}");
 }
 
 #[tokio::test]

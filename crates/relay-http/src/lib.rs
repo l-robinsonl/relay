@@ -20,6 +20,7 @@ pub mod oauth;
 pub mod oauth_redirect;
 mod response;
 pub mod sse;
+pub mod websocket;
 
 pub use build::{PreparedBody, apply_query_auth, build_headers, prepare_body, resolve_url};
 pub use client::ClientPool;

@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   httpSendWithTests: vi.fn(),
   httpCancel: vi.fn(),
   streamOpen: vi.fn(),
+  streamSend: vi.fn(),
   streamClose: vi.fn(),
 }))
 
@@ -372,11 +373,11 @@ describe('streams', () => {
       type: 'message',
       executionId,
       at: 1700000000000,
-      event: { event: 'price', data: '42', id: '7', retryMs: null },
+      message: { direction: 'inbound', name: 'price', data: '42', id: '7', binaryBytes: null },
     })
 
     expect(tabs.tabs[0]!.stream).toHaveLength(1)
-    expect(tabs.tabs[0]!.stream[0]!.event.data).toBe('42')
+    expect(tabs.tabs[0]!.stream[0]!.message.data).toBe('42')
   })
 
   it('an event for a stream nobody is watching is dropped, not thrown', () => {
@@ -417,6 +418,28 @@ describe('streams', () => {
     expect(mocks.streamClose).toHaveBeenCalledWith(executionId)
   })
 
+  it('a websocket carries a message out', async () => {
+    const tabs = useTabsStore()
+    const tab = tabs.openDraft()!
+    tabs.update(tab.id, { kind: 'websocket', url: 'wss://example.com/s' })
+    await tabs.send(tab.id)
+    const executionId = tabs.tabs[0]!.executionId
+
+    await tabs.streamSend(tab.id, 'hello')
+
+    expect(mocks.streamSend).toHaveBeenCalledWith(executionId, 'hello')
+  })
+
+  it('sending with nothing connected warns rather than throwing', async () => {
+    const tabs = useTabsStore()
+    const tab = tabs.openDraft()!
+    tabs.update(tab.id, { kind: 'websocket' })
+
+    await tabs.streamSend(tab.id, 'hello')
+
+    expect(mocks.streamSend).not.toHaveBeenCalled()
+  })
+
   it('clearing the log keeps the connection', async () => {
     const { tabs, tab } = streamTab()
     await tabs.send(tab.id)
@@ -424,7 +447,7 @@ describe('streams', () => {
       type: 'message',
       executionId: tabs.tabs[0]!.executionId!,
       at: 1,
-      event: { event: 'message', data: 'x', id: null, retryMs: null },
+      message: { direction: 'inbound', name: 'message', data: 'x', id: null, binaryBytes: null },
     })
 
     tabs.clearStream(tab.id)

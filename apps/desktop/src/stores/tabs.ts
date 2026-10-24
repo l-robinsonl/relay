@@ -4,7 +4,7 @@ import type { HttpExchange, RequestDoc } from '@relay/shared-types'
 import type { RequestSection, ResponseTab, Tab, TabResult } from '@/types/ui'
 import type { ScriptOutcome } from '@/services/ipc'
 import type { StreamEvent } from '@relay/shared-types'
-import { api, onExecutionProgress } from '@/services/ipc'
+import { api, onExecutionProgress, onStreamEvent } from '@/services/ipc'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { useToastStore } from '@/stores/toast'
 
@@ -233,7 +233,7 @@ export const useTabsStore = defineStore('tabs', () => {
         // and take the window down with it. The newest are the ones
         // being read.
         patchTab(tab.id, {
-          stream: [...tab.stream, { at: event.at, event: event.event }].slice(-2000),
+          stream: [...tab.stream, { at: event.at, message: event.message }].slice(-2000),
         })
         break
       case 'closed':
@@ -243,6 +243,26 @@ export const useTabsStore = defineStore('tabs', () => {
           streamError: event.error ?? null,
         })
         break
+    }
+  }
+
+  /**
+   * Sends a message on the tab's open websocket.
+   *
+   * Nothing is added to the log here. The frame is logged by Rust
+   * once it has actually gone out, so the transcript records what
+   * happened rather than what was attempted.
+   */
+  async function streamSend (tabId: string, text: string) {
+    const tab = tabs.value.find((t) => t.id === tabId)
+    if (!tab?.executionId) {
+      toasts.warn('Nothing is connected')
+      return
+    }
+    try {
+      await api.streamSend(tab.executionId, text)
+    } catch (error) {
+      toasts.error('The message could not be sent', error)
     }
   }
 
@@ -345,7 +365,7 @@ export const useTabsStore = defineStore('tabs', () => {
 
   /** Starts forwarding stream events into the matching tab. */
   async function watchStreams () {
-    return api.onStreamEvent(applyStreamEvent)
+    return onStreamEvent(applyStreamEvent)
   }
 
   /** Forgets a closed request's tab, after it is deleted elsewhere. */
@@ -375,6 +395,7 @@ export const useTabsStore = defineStore('tabs', () => {
     toggleStream,
     watchStreams,
     applyStreamEvent,
+    streamSend,
     clearStream,
     cancel,
     watchProgress,

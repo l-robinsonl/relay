@@ -13,8 +13,9 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use relay_models::{ExecutionId, ServerEvent};
+use relay_models::{ExecutionId, StreamMessage};
 use serde::{Deserialize, Serialize};
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use ts_rs::TS;
 
@@ -29,13 +30,13 @@ pub enum StreamEvent {
         /// Which stream, so the right tab shows it.
         execution_id: ExecutionId,
     },
-    /// An event arrived.
+    /// Something was said, by either end.
     #[serde(rename_all = "camelCase")]
     Message {
         /// Which stream it came from.
         execution_id: ExecutionId,
-        /// The event itself, as the server sent it.
-        event: ServerEvent,
+        /// What was said, and which way it went.
+        message: StreamMessage,
         /// When it arrived, so the log can be read as a timeline.
         #[ts(type = "number")]
         at: i64,
@@ -64,10 +65,46 @@ impl StreamSink for NoStreamEvents {
     fn emit(&self, _event: StreamEvent) {}
 }
 
+/// What the registry holds for one open stream.
+struct Handle {
+    /// Cancelling it asks the task to close the connection.
+    token: CancellationToken,
+    /// Where to put something the person wants to send. Absent for
+    /// server-sent events, which are one-way by definition — and
+    /// absent rather than an unused channel so that trying to send on
+    /// one is a refusal with a reason, not a message into a void.
+    outbound: Option<mpsc::UnboundedSender<String>>,
+}
+
+/// Why a send did not happen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SendError {
+    /// Nothing by that id is open.
+    NotOpen,
+    /// The stream is open but cannot carry a message.
+    NotTwoWay,
+    /// The connection ended between the lookup and the send.
+    Closed,
+}
+
+impl std::fmt::Display for SendError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotOpen => f.write_str("nothing is connected"),
+            Self::NotTwoWay => {
+                f.write_str("server-sent events are one-way — there is nothing to send on")
+            }
+            Self::Closed => f.write_str("the connection has closed"),
+        }
+    }
+}
+
+impl std::error::Error for SendError {}
+
 /// The streams currently open.
 #[derive(Clone, Default)]
 pub struct Streams {
-    open: Arc<Mutex<HashMap<ExecutionId, CancellationToken>>>,
+    open: Arc<Mutex<HashMap<ExecutionId, Handle>>>,
 }
 
 impl std::fmt::Debug for Streams {
@@ -84,25 +121,57 @@ impl Streams {
         Self::default()
     }
 
-    /// Registers a stream, returning the token that closes it.
+    /// Registers a one-way stream, returning the token that closes it.
     pub fn register(&self, id: ExecutionId) -> CancellationToken {
+        self.insert(id, None)
+    }
+
+    /// Registers a two-way stream.
+    ///
+    /// Returns the closing token and the receiver the connection task
+    /// reads what the person types from.
+    pub fn register_two_way(
+        &self,
+        id: ExecutionId,
+    ) -> (CancellationToken, mpsc::UnboundedReceiver<String>) {
+        let (tx, rx) = mpsc::unbounded_channel();
+        (self.insert(id, Some(tx)), rx)
+    }
+
+    fn insert(&self, id: ExecutionId, outbound: Option<mpsc::UnboundedSender<String>>) -> CancellationToken {
         let token = CancellationToken::new();
         if let Ok(mut open) = self.open.lock() {
             // Replacing an id closes whatever was there, rather than
             // leaking a task nothing can reach any more.
-            if let Some(previous) = open.insert(id, token.clone()) {
-                previous.cancel();
+            if let Some(previous) = open.insert(
+                id,
+                Handle {
+                    token: token.clone(),
+                    outbound,
+                },
+            ) {
+                previous.token.cancel();
             }
         }
         token
+    }
+
+    /// Sends a message on a two-way stream.
+    pub fn send(&self, id: &ExecutionId, text: String) -> Result<(), SendError> {
+        let Ok(open) = self.open.lock() else {
+            return Err(SendError::NotOpen);
+        };
+        let handle = open.get(id).ok_or(SendError::NotOpen)?;
+        let outbound = handle.outbound.as_ref().ok_or(SendError::NotTwoWay)?;
+        outbound.send(text).map_err(|_| SendError::Closed)
     }
 
     /// Closes one, if it is open. Says whether it was.
     pub fn close(&self, id: &ExecutionId) -> bool {
         match self.open.lock() {
             Ok(mut open) => match open.remove(id) {
-                Some(token) => {
-                    token.cancel();
+                Some(handle) => {
+                    handle.token.cancel();
                     true
                 }
                 None => false,
@@ -122,8 +191,8 @@ impl Streams {
     /// Closes every stream. Called when a workspace closes.
     pub fn close_all(&self) {
         if let Ok(mut open) = self.open.lock() {
-            for (_, token) in open.drain() {
-                token.cancel();
+            for (_, handle) in open.drain() {
+                handle.token.cancel();
             }
         }
     }
@@ -182,6 +251,63 @@ mod tests {
         assert!(!token.is_cancelled());
         // And closing it afterwards is a no-op rather than a panic.
         assert!(!streams.close(&id));
+    }
+
+    #[test]
+    fn a_two_way_stream_carries_what_is_sent_on_it() {
+        let streams = Streams::new();
+        let id = ExecutionId::new();
+        let (_token, mut rx) = streams.register_two_way(id.clone());
+
+        streams.send(&id, "hello".to_string()).unwrap();
+
+        assert_eq!(rx.try_recv().unwrap(), "hello");
+    }
+
+    #[test]
+    fn sending_on_a_one_way_stream_says_why_not() {
+        // Server-sent events have no channel back, and a caller that
+        // got a silent success would never find that out.
+        let streams = Streams::new();
+        let id = ExecutionId::new();
+        streams.register(id.clone());
+
+        assert_eq!(
+            streams.send(&id, "hello".to_string()),
+            Err(SendError::NotTwoWay)
+        );
+    }
+
+    #[test]
+    fn sending_on_nothing_says_nothing_is_connected() {
+        let streams = Streams::new();
+        assert_eq!(
+            streams.send(&ExecutionId::new(), "x".to_string()),
+            Err(SendError::NotOpen)
+        );
+    }
+
+    #[test]
+    fn sending_after_the_task_has_gone_reports_a_closed_connection() {
+        let streams = Streams::new();
+        let id = ExecutionId::new();
+        let (_token, rx) = streams.register_two_way(id.clone());
+        drop(rx);
+
+        assert_eq!(streams.send(&id, "x".to_string()), Err(SendError::Closed));
+    }
+
+    #[test]
+    fn each_reason_a_send_failed_reads_as_a_sentence() {
+        // These reach the person verbatim.
+        for error in [SendError::NotOpen, SendError::NotTwoWay, SendError::Closed] {
+            let text = error.to_string();
+            assert!(!text.is_empty());
+            assert!(
+                text.chars().next().is_some_and(char::is_lowercase),
+                "{text:?} reads as a fragment of something else"
+            );
+        }
     }
 
     #[test]

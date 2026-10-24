@@ -68,6 +68,22 @@ export function formatRelativeTime (millis: number): string {
 }
 
 /** The CSS variable holding a method's colour. */
+/**
+ * A wall-clock time with seconds, for a log.
+ *
+ * Relative time is the wrong unit here: twenty messages arriving in a
+ * second all read "just now", which answers neither when something
+ * happened nor how far apart two things were.
+ */
+export function formatClockTime (millis: number): string {
+  return new Date(millis).toLocaleTimeString(undefined, {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  })
+}
+
 export function methodColor (method: string): string {
   const known = ['get', 'post', 'put', 'patch', 'delete', 'head', 'options']
   const lowered = method.toLowerCase()

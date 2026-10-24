@@ -892,6 +892,16 @@ pub async fn stream_open(
         .await
 }
 
+/// Sends a message on an open websocket.
+#[tauri::command]
+pub fn stream_send(
+    service: State<'_, RelayService>,
+    execution_id: relay_models::ExecutionId,
+    text: String,
+) -> RelayResult<()> {
+    service.stream_send(&execution_id, text)
+}
+
 /// Closes a stream. Says whether one was open.
 #[tauri::command]
 pub fn stream_close(

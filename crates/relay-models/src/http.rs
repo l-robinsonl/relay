@@ -689,3 +689,97 @@ pub struct ServerEvent {
     #[ts(type = "number | null")]
     pub retry_ms: Option<u64>,
 }
+
+/// Which way a message travelled.
+///
+/// Server-sent events are only ever inbound; a websocket is a
+/// conversation, and a log that did not say who spoke would be
+/// unreadable.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum StreamDirection {
+    /// From the server.
+    #[default]
+    Inbound,
+    /// Sent by us.
+    Outbound,
+}
+
+/// One line in a stream's log, from either protocol.
+///
+/// Server-sent events and websocket frames are different things, but
+/// what a person wants to see of them is the same: which way it went,
+/// what kind it was, and what it said. One type means the log panel
+/// does not branch, and means history and export would not need a
+/// second shape later.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct StreamMessage {
+    /// Which way it went.
+    pub direction: StreamDirection,
+    /// The `event:` name for a server-sent event, or the frame type
+    /// for a websocket — `text`, `binary`, `ping`, `pong`, `close`.
+    pub name: String,
+    /// The payload, as text. A binary frame is rendered as hex.
+    pub data: String,
+    /// The server-sent `id:`, when there was one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    /// How many bytes the frame held, when it was binary. `data` is a
+    /// hex rendering in that case, so its length says nothing useful.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(type = "number | null")]
+    pub binary_bytes: Option<u64>,
+}
+
+impl StreamMessage {
+    /// A text frame, in whichever direction.
+    pub fn text(direction: StreamDirection, data: impl Into<String>) -> Self {
+        Self {
+            direction,
+            name: "text".to_string(),
+            data: data.into(),
+            id: None,
+            binary_bytes: None,
+        }
+    }
+
+    /// A binary frame, shown as hex with its true length beside it.
+    pub fn binary(direction: StreamDirection, bytes: &[u8]) -> Self {
+        /// Enough to recognise a payload without filling the window
+        /// with a megabyte of hex.
+        const PREVIEW: usize = 256;
+
+        let mut data = bytes
+            .iter()
+            .take(PREVIEW)
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        if bytes.len() > PREVIEW {
+            data.push('…');
+        }
+
+        Self {
+            direction,
+            name: "binary".to_string(),
+            data,
+            id: None,
+            binary_bytes: Some(bytes.len() as u64),
+        }
+    }
+}
+
+impl From<ServerEvent> for StreamMessage {
+    fn from(event: ServerEvent) -> Self {
+        Self {
+            direction: StreamDirection::Inbound,
+            name: event.event,
+            data: event.data,
+            id: event.id,
+            binary_bytes: None,
+        }
+    }
+}

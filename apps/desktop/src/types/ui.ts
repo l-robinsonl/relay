@@ -1,4 +1,4 @@
-import type { HttpResponseData, RequestDoc, TransportError, ServerEvent } from '@relay/shared-types'
+import type { HttpResponseData, RequestDoc, TransportError, StreamMessage } from '@relay/shared-types'
 import type { ScriptOutcome } from '@/services/ipc'
 
 /** An editor tab. */
@@ -22,7 +22,7 @@ export interface Tab {
   activeResponseTab: ResponseTab
   /** What the post-response script reported, if it ran. */
   tests: ScriptOutcome | null
-  /** Events received on an open stream, oldest first. */
+  /** Everything said on an open stream, oldest first. */
   stream: StreamLine[]
   /** Whether a stream is currently connected. */
   streaming: boolean
@@ -30,10 +30,10 @@ export interface Tab {
   streamError: string | null
 }
 
-/** One event in a stream's log. */
+/** One line in a stream's log. */
 export interface StreamLine {
   at: number
-  event: ServerEvent
+  message: StreamMessage
 }
 
 /** The outcome shown in the response panel. */

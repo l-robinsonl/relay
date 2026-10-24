@@ -339,12 +339,12 @@ export const api = {
   /** Opens a stream. Resolves once it is running, not when it ends. */
   streamOpen: (executionId: string, doc: RequestDoc, environment: string | null) =>
     call<void>('stream_open', { executionId, doc, environment }),
+  /** Sends a message on an open websocket. */
+  streamSend: (executionId: string, text: string) =>
+    call<void>('stream_send', { executionId, text }),
   /** Closes a stream. Says whether one was open. */
   streamClose: (executionId: string) =>
     call<boolean>('stream_close', { executionId }),
-  /** Events from every open stream. Returns an unsubscribe function. */
-  onStreamEvent: (handler: (event: StreamEvent) => void): Promise<UnlistenFn> =>
-    listen<StreamEvent>('relay://stream', (e) => handler(e.payload)),
 
   /** Asks a GraphQL endpoint what it accepts. */
   graphqlSchema: (doc: RequestDoc, environment: string | null) =>
@@ -421,6 +421,11 @@ export const api = {
   stateGet: (key: string) => call<string | null>('state_get', { key }),
   stateSet: (key: string, value: string) => call<void>('state_set', { key, value }),
   databaseBackup: (destination: string) => call<void>('database_backup', { destination }),
+}
+
+/** Subscribes to events from every open stream. */
+export function onStreamEvent (handler: (event: StreamEvent) => void): Promise<UnlistenFn> {
+  return listen<StreamEvent>('relay://stream', (event) => handler(event.payload))
 }
 
 /** Subscribes to progress events for in-flight requests. */

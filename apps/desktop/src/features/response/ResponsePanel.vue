@@ -108,7 +108,9 @@ const sendShortcut = describeShortcut({ key: 'Enter', mod: true })
       :lines="tab.stream"
       :live="tab.streaming"
       :error="tab.streamError"
+      :can-send="tab.doc.kind === 'websocket'"
       @clear="tabs.clearStream(tab.id)"
+      @send="tabs.streamSend(tab.id, $event)"
     />
   </section>
 
