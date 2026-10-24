@@ -31,6 +31,42 @@ use crate::error::{ServerError, ServerResult};
 #[derive(Clone)]
 pub struct PostgresStore {
     pool: PgPool,
+    /// Whether this deployment charges for workspaces.
+    ///
+    /// The store needs it because the paywall lives here, beside
+    /// authorisation and for the same reason: a handler cannot
+    /// forget what it never had to remember. Self-hosting leaves it
+    /// false and nothing is ever gated.
+    charges: bool,
+}
+
+impl PostgresStore {
+    /// Turns the paywall on. Called at startup when every Stripe
+    /// setting is present; see `Config::bills`.
+    pub fn charging(mut self, charges: bool) -> Self {
+        self.charges = charges;
+        self
+    }
+
+    /// Refuses a workspace nobody has paid for, on a charging
+    /// deployment.
+    ///
+    /// A lapsed or cancelled subscription passes: having paid once
+    /// is enough to keep reaching work already stored.
+    async fn require_paid(&self, workspace_id: &str) -> ServerResult<()> {
+        if !self.charges {
+            return Ok(());
+        }
+        if self.subscription(workspace_id).await?.is_some() {
+            return Ok(());
+        }
+        Err(ServerError::LimitExceeded {
+            limit: "subscription",
+            message: crate::billing::Entitlement::unsubscribed()
+                .notice
+                .unwrap_or_default(),
+        })
+    }
 }
 
 impl PostgresStore {
@@ -64,12 +100,18 @@ impl PostgresStore {
             .connect_with(options)
             .await?;
 
-        Ok(Self { pool })
+        Ok(Self {
+            pool,
+            charges: false,
+        })
     }
 
     /// Wraps an existing pool, for tests.
     pub fn from_pool(pool: PgPool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            charges: false,
+        }
     }
 
     /// The pool, for diagnostics.
@@ -513,9 +555,11 @@ impl SyncStore for PostgresStore {
 
     async fn entitlement(&self, workspace_id: &str) -> ServerResult<crate::billing::Entitlement> {
         match self.subscription(workspace_id).await? {
-            // No row is unmetered, not unpaid. Self-hosting never
-            // writes one, and a workspace predating billing keeps
-            // working rather than silently losing its seats.
+            // No row means unmetered when nobody is charging — which
+            // is self-hosting, and every workspace that predates
+            // billing. On a deployment that does charge, no row means
+            // nobody has paid for this one.
+            None if self.charges => Ok(crate::billing::Entitlement::unsubscribed()),
             None => Ok(crate::billing::Entitlement::unmetered()),
             Some(subscription) => Ok(subscription.entitlement()),
         }
@@ -1003,6 +1047,7 @@ impl SyncStore for PostgresStore {
     async fn head(&self, actor: &Actor, workspace_id: &str) -> ServerResult<i64> {
         self.authorise(workspace_id, &actor.user_id, Role::Viewer)
             .await?;
+        self.require_paid(workspace_id).await?;
         let row = sqlx::query("SELECT change_seq FROM relay.workspaces WHERE id = $1")
             .bind(workspace_id)
             .fetch_optional(&self.pool)
@@ -1020,6 +1065,7 @@ impl SyncStore for PostgresStore {
     ) -> ServerResult<ChangePage> {
         self.authorise(workspace_id, &actor.user_id, Role::Viewer)
             .await?;
+        self.require_paid(workspace_id).await?;
 
         let limit = limit.clamp(1, relay_sync::MAX_PAGE_SIZE);
         let head = self.head(actor, workspace_id).await?;
@@ -1059,6 +1105,7 @@ impl SyncStore for PostgresStore {
     ) -> ServerResult<ApplyResult> {
         self.authorise(workspace_id, &actor.user_id, Role::Editor)
             .await?;
+        self.require_paid(workspace_id).await?;
 
         logic::validate_batch(&MutationBatchRef {
             mutations: &batch.mutations,
@@ -1206,6 +1253,7 @@ impl SyncStore for PostgresStore {
     async fn export(&self, actor: &Actor, workspace_id: &str) -> ServerResult<ChangePage> {
         self.authorise(workspace_id, &actor.user_id, Role::Viewer)
             .await?;
+        self.require_paid(workspace_id).await?;
         let head = self.head(actor, workspace_id).await?;
 
         let rows = sqlx::query(

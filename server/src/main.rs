@@ -35,7 +35,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let store: Arc<dyn SyncStore> = if config.is_postgres() {
         tracing::info!("connecting to PostgreSQL");
-        Arc::new(PostgresStore::connect(&config.database_url).await?)
+        Arc::new(
+            PostgresStore::connect(&config.database_url)
+                .await?
+                .charging(config.bills()),
+        )
     } else {
         let path = config.database_url.trim_start_matches("sqlite://");
         // sqlx will create the file but not its parent directory.
@@ -45,7 +49,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             std::fs::create_dir_all(parent)?;
         }
         tracing::info!(%path, "opening SQLite database");
-        Arc::new(SqliteStore::connect(&config.database_url).await?)
+        Arc::new(
+            SqliteStore::connect(&config.database_url)
+                .await?
+                .charging(config.bills()),
+        )
     };
 
     store.migrate().await?;

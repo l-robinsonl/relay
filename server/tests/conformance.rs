@@ -20,6 +20,13 @@ async fn sqlite_store() -> Arc<dyn SyncStore> {
     Arc::new(store)
 }
 
+/// The same, with the paywall on — a deployment that charges.
+async fn charging_sqlite_store() -> Arc<dyn SyncStore> {
+    let store = SqliteStore::connect("sqlite::memory:").await.unwrap();
+    store.migrate().await.unwrap();
+    Arc::new(store.charging(true))
+}
+
 /// A Postgres store against a scratch schema, when one is configured.
 ///
 /// Absent configuration means "do not test Postgres" and is fine.
@@ -1514,6 +1521,72 @@ async fn a_cancelled_subscription_stops_growth_only() {
         assert!(store.export(&owner, "w1").await.is_ok());
     })
     .await;
+}
+
+#[tokio::test]
+async fn a_charging_server_does_not_sync_a_workspace_nobody_paid_for() {
+    let store = charging_sqlite_store().await;
+    let owner = seed_user(&store, "ada@example.com").await;
+    store.create_workspace(&owner, "w1", "Team").await.unwrap();
+
+    // Nothing of theirs is on the server yet, so nothing is being
+    // withheld. This is a price, asked before the work starts.
+    assert!(store.head(&owner, "w1").await.is_err());
+    assert!(store.changes_since(&owner, "w1", 0, 100).await.is_err());
+    assert!(store.export(&owner, "w1").await.is_err());
+
+    let entitlement = store.entitlement("w1").await.unwrap();
+    assert!(!entitlement.syncs);
+    assert!(
+        entitlement
+            .notice
+            .unwrap()
+            .contains("stays on this machine")
+    );
+}
+
+#[tokio::test]
+async fn paying_once_is_enough_to_keep_syncing() {
+    // The distinction this whole gate turns on. Refusing to start
+    // storing somebody's work until they pay is a price. Refusing to
+    // hand back work already stored because a card failed is a
+    // hostage, and this product does not do the second.
+    for status in [
+        SubscriptionStatus::Active,
+        SubscriptionStatus::PastDue,
+        SubscriptionStatus::Canceled,
+    ] {
+        let store = charging_sqlite_store().await;
+        let owner = seed_user(&store, "ada@example.com").await;
+        store.create_workspace(&owner, "w1", "Team").await.unwrap();
+        store
+            .save_subscription(&subscription("w1", status, 3))
+            .await
+            .unwrap();
+
+        assert!(
+            store.head(&owner, "w1").await.is_ok(),
+            "{status:?} stopped a paid workspace syncing"
+        );
+        assert!(store.export(&owner, "w1").await.is_ok(), "{status:?}");
+        assert!(store.entitlement("w1").await.unwrap().syncs, "{status:?}");
+    }
+}
+
+#[tokio::test]
+async fn self_hosting_never_meets_the_paywall() {
+    // The default store does not charge, which is what every
+    // self-hosted deployment runs.
+    let store = sqlite_store().await;
+    let owner = seed_user(&store, "ada@example.com").await;
+    store.create_workspace(&owner, "w1", "Team").await.unwrap();
+
+    assert!(store.head(&owner, "w1").await.is_ok());
+    assert!(store.export(&owner, "w1").await.is_ok());
+
+    let entitlement = store.entitlement("w1").await.unwrap();
+    assert!(entitlement.syncs);
+    assert_eq!(entitlement.seats, None);
 }
 
 #[tokio::test]
