@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { CheckCircle2, Cloud, Loader2, X } from '@lucide/vue'
+import { CheckCircle2, Cloud, Loader2, Server, X } from '@lucide/vue'
 import type { ServerHealth } from '@/services/ipc'
 import { api } from '@/services/ipc'
 import { formatRelativeTime } from '@/composables/useFormat'
@@ -9,6 +9,7 @@ import { useSyncStore } from '@/stores/sync'
 import BillingPanel from '@/features/sync/BillingPanel.vue'
 import MembersPanel from '@/features/sync/MembersPanel.vue'
 import { useWorkspaceStore } from '@/stores/workspace'
+import { HOSTED_SERVER } from '@/services/hosted'
 
 /** Connecting a workspace to a server, or disconnecting it. */
 const props = defineProps<{ open: boolean }>()
@@ -19,6 +20,19 @@ const dialogs = useDialogStore()
 const workspace = useWorkspaceStore()
 
 const serverUrl = ref('')
+/** Which server, before an address has been chosen. Null means unasked. */
+const using = ref<'hosted' | 'own' | null>(null)
+
+/** Picks Relay's own server, so there is nothing to type or look up. */
+function useHosted () {
+  using.value = 'hosted'
+  serverUrl.value = HOSTED_SERVER
+}
+
+function useOwn () {
+  using.value = 'own'
+  serverUrl.value = ''
+}
 const email = ref('')
 const password = ref('')
 const join = ref(false)
@@ -345,18 +359,61 @@ async function disconnect () {
           <div v-else class="space-y-3">
             <p class="text-xs text-muted">
               Put this workspace on a server to use it from more than one machine, or
-              to share it with people you work with. Type the address and Relay will
-              offer to sign you in or create an account.
+              to share it with people you work with.
             </p>
             <p class="text-xs text-muted">
               Nothing here is required — Relay is complete without a server, and
               everything you have made stays on this machine either way.
             </p>
 
-            <div>
-              <label for="server-url" class="mb-1 block text-xs font-medium text-secondary">
-                Server address
-              </label>
+            <!-- Someone without a server of their own had nothing to
+                 type here, and no way to discover that an account was
+                 even on offer. The two sit side by side deliberately:
+                 self-hosting is not the lesser path. -->
+            <div v-if="using === null" class="grid gap-2 sm:grid-cols-2">
+              <button
+                type="button"
+                class="rounded-md border border-subtle p-3 text-left transition-colors
+                       hover:border-[var(--border-strong)] hover:bg-[var(--surface-raised)]"
+                @click="useHosted"
+              >
+                <span class="flex items-center gap-1.5 text-xs font-medium text-primary">
+                  <Cloud :size="13" />
+                  Use Relay's server
+                </span>
+                <span class="mt-1 block text-xs text-muted">
+                  Make an account in a moment. Nothing to set up.
+                </span>
+              </button>
+              <button
+                type="button"
+                class="rounded-md border border-subtle p-3 text-left transition-colors
+                       hover:border-[var(--border-strong)] hover:bg-[var(--surface-raised)]"
+                @click="useOwn"
+              >
+                <span class="flex items-center gap-1.5 text-xs font-medium text-primary">
+                  <Server :size="13" />
+                  Use my own server
+                </span>
+                <span class="mt-1 block text-xs text-muted">
+                  Any Relay server you or your team run.
+                </span>
+              </button>
+            </div>
+
+            <div v-else>
+              <div class="mb-1 flex items-center justify-between">
+                <label for="server-url" class="block text-xs font-medium text-secondary">
+                  {{ using === 'hosted' ? "Relay's server" : 'Server address' }}
+                </label>
+                <button
+                  type="button"
+                  class="text-xs text-muted underline underline-offset-2 hover:text-secondary"
+                  @click="using = null; serverUrl = ''; health = null; probeError = null"
+                >
+                  Change
+                </button>
+              </div>
               <div class="flex gap-2">
                 <input
                   id="server-url"

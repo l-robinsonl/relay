@@ -3,6 +3,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { flushPromises, mount } from '@vue/test-utils'
 import SyncSettings from './SyncSettings.vue'
 import { api } from '@/services/ipc'
+import { HOSTED_SERVER } from '@/services/hosted'
 
 vi.mock('@/services/ipc', () => ({
   api: {
@@ -19,6 +20,12 @@ vi.mock('@/services/ipc', () => ({
 
 const mocked = vi.mocked(api)
 
+/** Picks "my own server", which is what reveals the address field. */
+async function chooseOwnServer (wrapper: { findAll: (s: string) => { text: () => string, trigger: (e: string) => Promise<unknown> }[] }) {
+  const own = wrapper.findAll('button').find((b) => b.text().includes('my own server'))
+  if (own) await own.trigger('click')
+}
+
 /** Mounts the panel already past the server check. */
 async function panel () {
   mocked.syncProbe.mockResolvedValue({
@@ -33,6 +40,7 @@ async function panel () {
     global: { stubs: { Teleport: true } },
   })
 
+  await chooseOwnServer(wrapper)
   await wrapper.find('#server-url').setValue('https://relay.test')
   await wrapper.findAll('button').find((b) => b.text().includes('Check'))!.trigger('click')
   await flushPromises()
@@ -43,6 +51,59 @@ describe('SyncSettings', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
+  })
+
+  it('offers a server to someone who does not run one', async () => {
+    // The dialog used to open on an empty address field with a
+    // placeholder of https://relay.internal. Anyone without a server
+    // of their own had nothing to type and no way to discover an
+    // account was on offer at all.
+    const wrapper = mount(SyncSettings, {
+      props: { open: true },
+      global: { stubs: { Teleport: true } },
+    })
+
+    expect(wrapper.text()).toContain("Use Relay's server")
+    expect(wrapper.text()).toContain('Use my own server')
+    // Neither is preselected: self-hosting is not the lesser path.
+    expect(wrapper.find('#server-url').exists()).toBe(false)
+  })
+
+  it('fills in the address when Relay\'s own server is chosen', async () => {
+    vi.useFakeTimers()
+    mocked.syncProbe.mockResolvedValue({
+      status: 'ok', backend: 'postgres', protocol: '1', version: '0.1.0',
+    })
+
+    const wrapper = mount(SyncSettings, {
+      props: { open: true },
+      global: { stubs: { Teleport: true } },
+    })
+    await wrapper.findAll('button').find((b) => b.text().includes("Relay's server"))!.trigger('click')
+
+    const field = wrapper.find('#server-url').element as HTMLInputElement
+    expect(field.value).toBe(HOSTED_SERVER)
+
+    // And it goes looking without a further click, so the sign-in
+    // options appear on their own.
+    await vi.advanceTimersByTimeAsync(1000)
+    vi.useRealTimers()
+    await flushPromises()
+
+    expect(mocked.syncProbe).toHaveBeenCalledWith(HOSTED_SERVER)
+    expect(wrapper.text()).toContain('Create an account')
+  })
+
+  it('lets someone change their mind about which server', async () => {
+    const wrapper = mount(SyncSettings, {
+      props: { open: true },
+      global: { stubs: { Teleport: true } },
+    })
+    await wrapper.findAll('button').find((b) => b.text().includes("Relay's server"))!.trigger('click')
+    await wrapper.findAll('button').find((b) => b.text().includes('Change'))!.trigger('click')
+
+    expect(wrapper.text()).toContain('Use my own server')
+    expect(wrapper.find('#server-url').exists()).toBe(false)
   })
 
   it('checks the address on its own, without a second click', async () => {
@@ -59,6 +120,7 @@ describe('SyncSettings', () => {
       props: { open: true },
       global: { stubs: { Teleport: true } },
     })
+    await chooseOwnServer(wrapper)
     await wrapper.find('#server-url').setValue('https://relay.test')
 
     expect(mocked.syncProbe).not.toHaveBeenCalled()
@@ -78,6 +140,7 @@ describe('SyncSettings', () => {
       props: { open: true },
       global: { stubs: { Teleport: true } },
     })
+    await chooseOwnServer(wrapper)
 
     for (const partial of ['h', 'https:/', 'https://rel']) {
       await wrapper.find('#server-url').setValue(partial)

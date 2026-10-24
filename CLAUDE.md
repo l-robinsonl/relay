@@ -407,7 +407,17 @@ Two things it cannot see, both already paid for:
 
 ## Next
 
-1. Deploy, which is the only item left that changes what Relay *is*.
+1. **Hosting the assistant** — `docs/ASSISTANT-HOSTING.md`, designed
+   and not built. The paid tier is £5 per person per month covering
+   sync and the assistant, which needs the server to hold a provider
+   key and forward requests. Bring-your-own-key stays free and
+   unlimited, deliberately: it is the escape hatch that makes every
+   cap safe to enforce. Costs are measured rather than guessed —
+   `crates/relay-app/tests/measure_prompt.rs` prints the 1,200-token
+   fixed overhead a turn carries, and the doc works the rest out from
+   there. Build it in the order the doc lists; step 4 is the client,
+   and it is step 4 rather than later on purpose.
+2. Deploy, which is the only item left that changes what Relay *is*.
    Sync has never crossed a network: two machines have never synced,
    and accounts, invitations and billing have never been used by two
    people at once. `render.yaml` and `deploy/compose.prod.yml` are
