@@ -1334,21 +1334,10 @@ async fn start_invite_only() -> TestServer {
     store.migrate().await.unwrap();
 
     let config = Config {
-        database_url: "sqlite::memory:".into(),
-        bind: "127.0.0.1:0".parse().unwrap(),
         public_url: "https://relay.test".into(),
         signup_mode: SignupMode::Invite,
         session_ttl: std::time::Duration::from_secs(3600),
-        admin_email: None,
-        admin_password: None,
-        max_body_bytes: relay_sync::MAX_BATCH_BYTES + 65536,
-        resend_api_key: None,
-        mail_from: None,
-        require_verified_email: false,
-        stripe_secret_key: None,
-        stripe_webhook_secret: None,
-        stripe_price_id: None,
-        stripe_return_url: None,
+        ..Config::default()
     };
 
     start_with(store, config).await
@@ -1668,6 +1657,175 @@ async fn a_non_member_cannot_list_who_has_been_invited() {
         .await;
 
     assert_eq!(response.status(), 404);
+}
+
+// --- the hosted assistant ---------------------------------------------------
+
+/// A server that runs the assistant on its own key.
+async fn start_hosting_assistant() -> TestServer {
+    let store = SqliteStore::connect("sqlite::memory:").await.unwrap();
+    store.migrate().await.unwrap();
+
+    let config = Config {
+        public_url: "https://relay.test".into(),
+        signup_mode: SignupMode::Open,
+        session_ttl: std::time::Duration::from_secs(3600),
+        stripe_secret_key: Some("sk_test_whatever".into()),
+        stripe_webhook_secret: Some(WEBHOOK_SECRET.into()),
+        stripe_price_id: Some("price_seat".into()),
+        stripe_price_assistant: Some("price_with_ai".into()),
+        assistant_key: Some("sk-ant-not-used-here".into()),
+        assistant_turns: 3,
+        ..Config::default()
+    };
+
+    start_with(store, config).await
+}
+
+/// Puts a workspace on a given price, the way a webhook would.
+async fn subscribe(server: &TestServer, workspace: &str, price: &str) {
+    server
+        .store
+        .save_subscription(&relay_server::billing::Subscription {
+            workspace_id: workspace.into(),
+            customer_id: "cus_1".into(),
+            subscription_id: Some("sub_1".into()),
+            status: relay_server::billing::SubscriptionStatus::Active,
+            seats: 5,
+            current_period_end: None,
+            price_id: Some(price.into()),
+        })
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn a_server_that_hosts_no_assistant_says_so_kindly() {
+    // Self-hosting, and most deployments. Nothing is wrong: the
+    // assistant works with the person's own key, as it does for
+    // everybody.
+    let server = start(SignupMode::Open).await;
+    let token = owner_with_workspace(&server).await;
+
+    let response = server.get_auth("/v1/assistant/usage", &token).await;
+    assert_eq!(response.status(), 200);
+
+    let body: Value = response.json().await.unwrap();
+    assert_eq!(body["allowed"], false);
+    assert!(body["included"].is_null(), "{body}");
+    let notice = body["notice"].as_str().unwrap();
+    assert!(notice.contains("own API key"), "{notice}");
+}
+
+#[tokio::test]
+async fn the_cheaper_plan_does_not_include_the_assistant() {
+    let server = start_hosting_assistant().await;
+    let token = owner_with_workspace(&server).await;
+    subscribe(&server, "w1", "price_seat").await;
+
+    let body: Value = server
+        .get_auth("/v1/assistant/usage", &token)
+        .await
+        .json()
+        .await
+        .unwrap();
+
+    assert_eq!(body["allowed"], false);
+    assert!(body["included"].is_null(), "{body}");
+}
+
+#[tokio::test]
+async fn the_assistant_plan_comes_with_an_allowance() {
+    let server = start_hosting_assistant().await;
+    let token = owner_with_workspace(&server).await;
+    subscribe(&server, "w1", "price_with_ai").await;
+
+    let body: Value = server
+        .get_auth("/v1/assistant/usage", &token)
+        .await
+        .json()
+        .await
+        .unwrap();
+
+    assert_eq!(body["allowed"], true);
+    assert_eq!(body["included"], 3);
+    assert_eq!(body["used"], 0);
+}
+
+#[tokio::test]
+async fn the_allowance_runs_out_and_points_somewhere_useful() {
+    let server = start_hosting_assistant().await;
+    let token = owner_with_workspace(&server).await;
+    subscribe(&server, "w1", "price_with_ai").await;
+
+    let me: Value = server
+        .get_auth("/v1/auth/me", &token)
+        .await
+        .json()
+        .await
+        .unwrap();
+    let user_id = me["id"].as_str().unwrap();
+    let period = relay_server::billing::period_start(relay_models::Timestamp::now().as_millis());
+
+    for _ in 0..3 {
+        server
+            .store
+            .record_assistant_turn(
+                user_id,
+                period,
+                relay_server::billing::AssistantUsage {
+                    turns: 1,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+    }
+
+    let body: Value = server
+        .get_auth("/v1/assistant/usage", &token)
+        .await
+        .json()
+        .await
+        .unwrap();
+
+    assert_eq!(body["allowed"], false);
+    assert_eq!(body["used"], 3);
+    let notice = body["notice"].as_str().unwrap();
+    assert!(notice.contains("own API key"), "{notice}");
+    assert!(notice.contains("no limit"), "{notice}");
+}
+
+#[tokio::test]
+async fn one_paid_workspace_is_enough() {
+    // Somebody in a paid team and a free side project has the
+    // allowance. Charging them again for a plan they already have
+    // would be the wrong answer.
+    let server = start_hosting_assistant().await;
+    let token = owner_with_workspace(&server).await;
+    server
+        .post_auth(
+            "/v1/workspaces",
+            &token,
+            json!({ "id": "side", "name": "Side" }),
+        )
+        .await;
+    subscribe(&server, "side", "price_with_ai").await;
+
+    let body: Value = server
+        .get_auth("/v1/assistant/usage", &token)
+        .await
+        .json()
+        .await
+        .unwrap();
+
+    assert_eq!(body["allowed"], true);
+}
+
+#[tokio::test]
+async fn usage_needs_a_session() {
+    let server = start_hosting_assistant().await;
+    assert_eq!(server.get("/v1/assistant/usage").await.status(), 401);
 }
 
 // --- signing up from a browser ----------------------------------------------

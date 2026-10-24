@@ -240,6 +240,36 @@ pub trait SyncStore: Send + Sync + 'static {
     /// working rather than silently losing its seats.
     async fn entitlement(&self, workspace_id: &str) -> ServerResult<crate::billing::Entitlement>;
 
+    /// Every subscription covering a workspace this person belongs to.
+    ///
+    /// The allowance follows the person, and which plans they are on
+    /// is read from these. Deliberately returns the subscriptions
+    /// rather than a plan: what a price means is configuration, which
+    /// the store does not have.
+    async fn subscriptions_for_user(
+        &self,
+        user_id: &str,
+    ) -> ServerResult<Vec<crate::billing::Subscription>>;
+
+    /// What this person has spent on the hosted assistant in a period.
+    async fn assistant_usage(
+        &self,
+        user_id: &str,
+        period_start: i64,
+    ) -> ServerResult<crate::billing::AssistantUsage>;
+
+    /// Records a finished turn, returning the running total.
+    ///
+    /// One statement, because two turns can finish at the same
+    /// moment and a read-then-write would lose one of them — which is
+    /// the wrong way round for a cap to be wrong.
+    async fn record_assistant_turn(
+        &self,
+        user_id: &str,
+        period_start: i64,
+        usage: crate::billing::AssistantUsage,
+    ) -> ServerResult<crate::billing::AssistantUsage>;
+
     /// Records or updates a subscription.
     async fn save_subscription(
         &self,

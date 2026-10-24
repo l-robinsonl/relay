@@ -232,6 +232,7 @@ pub fn router(state: AppState) -> Router {
             "/v1/workspaces/{id}/billing/portal",
             post(routes::billing_portal),
         )
+        .route("/v1/assistant/usage", get(routes::assistant_usage))
         .route("/v1/billing/webhook", post(routes::billing_webhook))
         // Where Stripe returns the browser. Named in every checkout
         // session, so they have to exist.

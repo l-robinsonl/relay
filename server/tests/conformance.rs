@@ -1517,6 +1517,171 @@ async fn a_cancelled_subscription_stops_growth_only() {
 }
 
 #[tokio::test]
+async fn assistant_turns_accumulate_rather_than_replace() {
+    // Two turns finishing at the same moment must both be counted. A
+    // read-then-write would lose one, and losing one is the wrong way
+    // round for a cap to be wrong.
+    use relay_server::billing::AssistantUsage;
+
+    for_each_backend(|store| async move {
+        let ada = seed_user(&store, "ada@example.com").await;
+        let period = relay_server::billing::period_start(1_781_354_096_000);
+
+        let first = store
+            .record_assistant_turn(
+                &ada.user_id,
+                period,
+                AssistantUsage {
+                    turns: 1,
+                    input_tokens: 8000,
+                    output_tokens: 500,
+                    cached_tokens: 0,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(first.turns, 1);
+
+        let second = store
+            .record_assistant_turn(
+                &ada.user_id,
+                period,
+                AssistantUsage {
+                    turns: 1,
+                    input_tokens: 6000,
+                    output_tokens: 300,
+                    cached_tokens: 5000,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(second.turns, 2);
+        assert_eq!(second.input_tokens, 14_000);
+        assert_eq!(second.output_tokens, 800);
+        assert_eq!(second.cached_tokens, 5_000);
+
+        // And reading it back agrees with what the write returned.
+        let read = store.assistant_usage(&ada.user_id, period).await.unwrap();
+        assert_eq!(read, second);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn each_month_starts_from_nothing() {
+    use relay_server::billing::AssistantUsage;
+
+    for_each_backend(|store| async move {
+        let ada = seed_user(&store, "ada@example.com").await;
+        let june = relay_server::billing::period_start(1_781_354_096_000);
+        let july = relay_server::billing::period_start(1_781_354_096_000 + 86_400_000 * 40);
+        assert_ne!(june, july);
+
+        store
+            .record_assistant_turn(
+                &ada.user_id,
+                june,
+                AssistantUsage {
+                    turns: 900,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            store
+                .assistant_usage(&ada.user_id, june)
+                .await
+                .unwrap()
+                .turns,
+            900
+        );
+        assert_eq!(
+            store
+                .assistant_usage(&ada.user_id, july)
+                .await
+                .unwrap()
+                .turns,
+            0
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn usage_is_not_shared_between_people() {
+    use relay_server::billing::AssistantUsage;
+
+    for_each_backend(|store| async move {
+        let ada = seed_user(&store, "ada@example.com").await;
+        let bob = seed_user(&store, "bob@example.com").await;
+        let period = relay_server::billing::period_start(1_781_354_096_000);
+
+        store
+            .record_assistant_turn(
+                &ada.user_id,
+                period,
+                AssistantUsage {
+                    turns: 5,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            store
+                .assistant_usage(&ada.user_id, period)
+                .await
+                .unwrap()
+                .turns,
+            5
+        );
+        assert_eq!(
+            store
+                .assistant_usage(&bob.user_id, period)
+                .await
+                .unwrap()
+                .turns,
+            0
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_persons_subscriptions_are_every_workspace_they_are_in() {
+    // The allowance follows the person, so this is what decides
+    // whether they have one.
+    for_each_backend(|store| async move {
+        let ada = seed_user(&store, "ada@example.com").await;
+        let bob = seed_user(&store, "bob@example.com").await;
+        store.create_workspace(&ada, "paid", "Paid").await.unwrap();
+        store.create_workspace(&ada, "free", "Free").await.unwrap();
+
+        let mut paid = subscription("paid", SubscriptionStatus::Active, 5);
+        paid.price_id = Some("price_with_ai".into());
+        store.save_subscription(&paid).await.unwrap();
+
+        let hers = store.subscriptions_for_user(&ada.user_id).await.unwrap();
+        assert_eq!(hers.len(), 1, "only the workspace with a subscription");
+        assert_eq!(hers[0].price_id.as_deref(), Some("price_with_ai"));
+
+        // Somebody who is not a member of it gets nothing.
+        assert!(
+            store
+                .subscriptions_for_user(&bob.user_id)
+                .await
+                .unwrap()
+                .is_empty(),
+            "a stranger's subscription leaked"
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
 async fn the_price_a_workspace_pays_survives_a_round_trip() {
     // Which plan a subscription is on is read from its price, so the
     // price has to come back out of the database exactly as it went

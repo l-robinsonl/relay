@@ -118,6 +118,7 @@ impl SyncStore for PostgresStore {
             include_str!("../../migrations/postgres/0002_email_tokens.sql"),
             include_str!("../../migrations/postgres/0003_billing.sql"),
             include_str!("../../migrations/postgres/0004_assistant_plan.sql"),
+            include_str!("../../migrations/postgres/0005_assistant_usage.sql"),
         ] {
             sqlx::raw_sql(sql).execute(&self.pool).await?;
         }
@@ -518,6 +519,96 @@ impl SyncStore for PostgresStore {
             None => Ok(crate::billing::Entitlement::unmetered()),
             Some(subscription) => Ok(subscription.entitlement()),
         }
+    }
+
+    async fn subscriptions_for_user(
+        &self,
+        user_id: &str,
+    ) -> ServerResult<Vec<crate::billing::Subscription>> {
+        let rows = sqlx::query(
+            "SELECT s.workspace_id, s.customer_id, s.subscription_id, s.status, s.seats,
+                    s.current_period_end, s.price_id
+             FROM relay.subscriptions s
+             JOIN relay.memberships m ON m.workspace_id = s.workspace_id
+             WHERE m.user_id = $1",
+        )
+        .bind(user_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|r| crate::billing::Subscription {
+                workspace_id: r.get("workspace_id"),
+                customer_id: r.get("customer_id"),
+                subscription_id: r.get("subscription_id"),
+                status: crate::billing::SubscriptionStatus::parse(&r.get::<String, _>("status")),
+                seats: r.get::<i64, _>("seats").max(0) as u32,
+                current_period_end: r.get("current_period_end"),
+                price_id: r.get("price_id"),
+            })
+            .collect())
+    }
+
+    async fn assistant_usage(
+        &self,
+        user_id: &str,
+        period_start: i64,
+    ) -> ServerResult<crate::billing::AssistantUsage> {
+        let row = sqlx::query(
+            "SELECT turns, input_tokens, output_tokens, cached_tokens
+             FROM relay.assistant_usage WHERE user_id = $1 AND period_start = $2",
+        )
+        .bind(user_id)
+        .bind(period_start)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row
+            .map(|r| crate::billing::AssistantUsage {
+                turns: r.get::<i64, _>("turns").max(0) as u32,
+                input_tokens: r.get::<i64, _>("input_tokens").max(0) as u64,
+                output_tokens: r.get::<i64, _>("output_tokens").max(0) as u64,
+                cached_tokens: r.get::<i64, _>("cached_tokens").max(0) as u64,
+            })
+            .unwrap_or_default())
+    }
+
+    async fn record_assistant_turn(
+        &self,
+        user_id: &str,
+        period_start: i64,
+        usage: crate::billing::AssistantUsage,
+    ) -> ServerResult<crate::billing::AssistantUsage> {
+        let row = sqlx::query(
+            "INSERT INTO relay.assistant_usage
+                 (user_id, period_start, turns, input_tokens, output_tokens,
+                  cached_tokens, updated_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)
+             ON CONFLICT(user_id, period_start) DO UPDATE SET
+                 turns = relay.assistant_usage.turns + excluded.turns,
+                 input_tokens = relay.assistant_usage.input_tokens + excluded.input_tokens,
+                 output_tokens = relay.assistant_usage.output_tokens + excluded.output_tokens,
+                 cached_tokens = relay.assistant_usage.cached_tokens + excluded.cached_tokens,
+                 updated_at = excluded.updated_at
+             RETURNING turns, input_tokens, output_tokens, cached_tokens",
+        )
+        .bind(user_id)
+        .bind(period_start)
+        .bind(i64::from(usage.turns))
+        .bind(usage.input_tokens as i64)
+        .bind(usage.output_tokens as i64)
+        .bind(usage.cached_tokens as i64)
+        .bind(now_millis())
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(crate::billing::AssistantUsage {
+            turns: row.get::<i64, _>("turns").max(0) as u32,
+            input_tokens: row.get::<i64, _>("input_tokens").max(0) as u64,
+            output_tokens: row.get::<i64, _>("output_tokens").max(0) as u64,
+            cached_tokens: row.get::<i64, _>("cached_tokens").max(0) as u64,
+        })
     }
 
     async fn save_subscription(

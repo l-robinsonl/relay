@@ -65,6 +65,19 @@ pub struct Config {
     pub stripe_price_id: Option<String>,
     /// Where the customer portal sends people back to.
     pub stripe_return_url: Option<String>,
+
+    /// The Stripe price that includes the hosted assistant. Any other
+    /// price is sync only.
+    pub stripe_price_assistant: Option<String>,
+    /// The provider key the server uses on a subscriber's behalf.
+    /// Unset means this deployment hosts no assistant at all.
+    pub assistant_key: Option<String>,
+    /// Which model it runs. Haiku by default: at roughly 0.08p a turn
+    /// the allowance below costs under a pound a month, where Sonnet
+    /// would be ten times that.
+    pub assistant_model: String,
+    /// Turns included per person per calendar month.
+    pub assistant_turns: u32,
     /// Whether an unverified account may sign in.
     ///
     /// Off by default so a self-hosted server with no mail provider
@@ -114,6 +127,16 @@ impl Config {
             stripe_webhook_secret: non_empty("STRIPE_WEBHOOK_SECRET"),
             stripe_price_id: non_empty("STRIPE_PRICE_SEAT_ANNUAL"),
             stripe_return_url: non_empty("STRIPE_PORTAL_RETURN_URL"),
+            stripe_price_assistant: non_empty("STRIPE_PRICE_SEAT_ASSISTANT"),
+            assistant_key: non_empty("RELAY_ASSISTANT_KEY"),
+            assistant_model: std::env::var("RELAY_ASSISTANT_MODEL")
+                .ok()
+                .filter(|v| !v.trim().is_empty())
+                .unwrap_or_else(|| "claude-haiku-5-5".to_string()),
+            assistant_turns: std::env::var("RELAY_ASSISTANT_TURNS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(1000),
         })
     }
 }
@@ -145,11 +168,24 @@ impl Default for Config {
             stripe_webhook_secret: None,
             stripe_price_id: None,
             stripe_return_url: None,
+            stripe_price_assistant: None,
+            assistant_key: None,
+            assistant_model: "claude-haiku-5-5".into(),
+            assistant_turns: 1000,
         }
     }
 }
 
 impl Config {
+    /// True when this deployment runs the assistant on its own key.
+    ///
+    /// Both halves required, like billing: a key with no price to
+    /// sell it against would hand model usage to everybody, and a
+    /// price with no key would charge for something that cannot work.
+    pub fn hosts_assistant(&self) -> bool {
+        self.assistant_key.is_some() && self.stripe_price_assistant.is_some()
+    }
+
     /// True when this deployment charges for seats.
     ///
     /// Both halves are required: a key with no webhook secret would
@@ -208,20 +244,7 @@ mod tests {
     fn postgres_urls_are_recognised_by_either_scheme() {
         let base = |url: &str| Config {
             database_url: url.to_string(),
-            bind: "127.0.0.1:0".parse().unwrap(),
-            public_url: String::new(),
-            signup_mode: SignupMode::Off,
-            session_ttl: Duration::from_secs(1),
-            admin_email: None,
-            admin_password: None,
-            max_body_bytes: 1024,
-            resend_api_key: None,
-            mail_from: None,
-            require_verified_email: false,
-            stripe_secret_key: None,
-            stripe_webhook_secret: None,
-            stripe_price_id: None,
-            stripe_return_url: None,
+            ..Config::default()
         };
 
         assert!(base("postgres://host/db").is_postgres());

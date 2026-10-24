@@ -118,6 +118,124 @@ impl SubscriptionStatus {
     }
 }
 
+/// What one person has spent on the hosted assistant this period.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssistantUsage {
+    /// Turns taken. This is what the cap counts, and what a person is
+    /// shown, because "847 of your 1,000 requests" is a sentence
+    /// somebody can act on and a token count is not.
+    pub turns: u32,
+    /// Tokens, which are the actual cost. Kept so the price can be
+    /// checked against reality rather than against the estimate.
+    pub input_tokens: u64,
+    /// Tokens generated.
+    pub output_tokens: u64,
+    /// Input tokens served from the prompt cache, billed at a tenth.
+    pub cached_tokens: u64,
+}
+
+/// What a person is allowed to do next.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Allowance {
+    /// Turns included this period. `None` means the hosted assistant
+    /// is not part of this person's plan at all.
+    pub included: Option<u32>,
+    /// Turns already taken.
+    pub used: u32,
+    /// Whether another turn may start.
+    pub allowed: bool,
+    /// What to tell them, when there is something to say.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notice: Option<String>,
+}
+
+impl Allowance {
+    /// Decides whether another turn may start.
+    ///
+    /// A pure function for the same reason the conflict decisions are
+    /// (`server/src/store/logic.rs`): the answer must not depend on
+    /// which database is underneath, or the same subscription would
+    /// be cut off on one and not the other.
+    ///
+    /// Not being included is not a failure. Everybody can use the
+    /// assistant with their own key, free and unmetered, so the
+    /// notice says that rather than suggesting something is wrong.
+    pub fn decide(included: Option<u32>, usage: AssistantUsage) -> Self {
+        let used = usage.turns;
+
+        match included {
+            None => Self {
+                included: None,
+                used,
+                allowed: false,
+                notice: Some(
+                    "This plan does not include the assistant. Add your own API key \
+                     in Settings and it works, with no limit."
+                        .into(),
+                ),
+            },
+            Some(limit) if used >= limit => Self {
+                included,
+                used,
+                allowed: false,
+                notice: Some(format!(
+                    "You have used all {limit} assistant requests included this month. \
+                     They reset on the first. Add your own API key in Settings to carry \
+                     on now, with no limit."
+                )),
+            },
+            Some(limit) => Self {
+                included,
+                used,
+                allowed: true,
+                // Said once, near the end, rather than counted down
+                // all month.
+                notice: (used * 10 >= limit * 9)
+                    .then(|| format!("{} of {limit} assistant requests used this month.", used)),
+            },
+        }
+    }
+}
+
+/// The first millisecond of the calendar month `now` falls in, UTC.
+///
+/// Calendar months rather than the Stripe billing period: usage is
+/// recorded per person, a person can belong to workspaces on
+/// different subscriptions, and there is no one period to use. It is
+/// also what anybody reading "this month" already assumes.
+pub fn period_start(now_millis: i64) -> i64 {
+    let days = now_millis.div_euclid(86_400_000);
+    let (year, month, _) = civil_from_days(days);
+    days_from_civil(year, month, 1) * 86_400_000
+}
+
+/// Days since the epoch to a civil date. Howard Hinnant's algorithm.
+fn civil_from_days(days: i64) -> (i64, u32, u32) {
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    (if m <= 2 { y + 1 } else { y }, m, d)
+}
+
+/// The inverse.
+fn days_from_civil(year: i64, month: u32, day: u32) -> i64 {
+    let y = if month <= 2 { year - 1 } else { year };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let mp = if month > 2 { month - 3 } else { month + 9 } as i64;
+    let doy = (153 * mp + 2) / 5 + day as i64 - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
+}
+
 /// What a subscription includes.
 ///
 /// Read from the Stripe price the subscription is actually on, rather
@@ -200,6 +318,72 @@ impl Subscription {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn used(turns: u32) -> AssistantUsage {
+        AssistantUsage {
+            turns,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_turn_is_allowed_until_the_allowance_runs_out() {
+        assert!(Allowance::decide(Some(1000), used(0)).allowed);
+        assert!(Allowance::decide(Some(1000), used(999)).allowed);
+        // The thousandth turn is the last one included, so at 1000
+        // used there is nothing left.
+        assert!(!Allowance::decide(Some(1000), used(1000)).allowed);
+        assert!(!Allowance::decide(Some(1000), used(1001)).allowed);
+    }
+
+    #[test]
+    fn running_out_points_at_the_free_way_to_carry_on() {
+        // A cap is only safe to enforce because the escape hatch
+        // exists. If the message does not mention it, it reads as a
+        // product that has stopped working.
+        let spent = Allowance::decide(Some(1000), used(1000));
+        let notice = spent.notice.unwrap();
+
+        assert!(notice.contains("1000"), "{notice}");
+        assert!(notice.contains("own API key"), "{notice}");
+        assert!(notice.contains("no limit"), "{notice}");
+    }
+
+    #[test]
+    fn not_being_included_is_not_a_failure() {
+        let none = Allowance::decide(None, used(0));
+
+        assert!(!none.allowed);
+        assert_eq!(none.included, None);
+        let notice = none.notice.unwrap();
+        assert!(notice.contains("own API key"), "{notice}");
+        // Nothing here should sound like a fault.
+        for alarming in ["error", "failed", "denied", "forbidden"] {
+            assert!(!notice.to_lowercase().contains(alarming), "{notice}");
+        }
+    }
+
+    #[test]
+    fn the_warning_arrives_near_the_end_and_not_before() {
+        assert!(Allowance::decide(Some(100), used(89)).notice.is_none());
+        assert!(Allowance::decide(Some(100), used(90)).notice.is_some());
+    }
+
+    #[test]
+    fn a_period_is_the_calendar_month_it_falls_in() {
+        // 2026-06-15T12:34:56Z
+        let mid_june = 1_781_354_096_000;
+        let start = period_start(mid_june);
+
+        // 2026-06-01T00:00:00Z
+        assert_eq!(start, 1_780_272_000_000);
+        // Idempotent: the start of a month is its own period start.
+        assert_eq!(period_start(start), start);
+        // And two instants in the same month agree.
+        assert_eq!(period_start(start + 86_400_000 * 20), start);
+        // While the next month does not.
+        assert_ne!(period_start(start + 86_400_000 * 40), start);
+    }
 
     #[test]
     fn the_assistant_price_is_the_only_one_that_includes_it() {

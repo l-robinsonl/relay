@@ -5,6 +5,7 @@
 //! [`crate::store::SyncStore`], which takes an `Actor` on every method, so
 //! a handler cannot forget it.
 
+use crate::billing::{Allowance, AssistantUsage};
 use axum::Json;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, Query, State};
@@ -559,6 +560,46 @@ async fn handle_socket(mut socket: WebSocket, state: AppState, workspace_id: Str
     }
 
     state.hub.prune();
+}
+
+// --- the hosted assistant ---------------------------------------------------
+
+/// Works out what a person may do with the hosted assistant.
+///
+/// Shared by the usage endpoint and, later, by the proxy itself —
+/// one place, so what the panel shows and what the proxy enforces
+/// cannot drift apart.
+pub async fn allowance_for(state: &AppState, user_id: &str) -> ServerResult<Allowance> {
+    if !state.config.hosts_assistant() {
+        return Ok(Allowance::decide(None, AssistantUsage::default()));
+    }
+
+    let assistant_price = state.config.stripe_price_assistant.as_deref();
+    let subscriptions = state.store.subscriptions_for_user(user_id).await?;
+
+    // The best plan any of their workspaces is on. Somebody in a paid
+    // team and a free side project gets the allowance; charging them
+    // for a plan they already have would be the wrong answer.
+    let included = subscriptions
+        .iter()
+        .any(|s| s.status.entitles() && s.plan(assistant_price).includes_assistant())
+        .then_some(state.config.assistant_turns);
+
+    let period = crate::billing::period_start(Timestamp::now().as_millis());
+    let usage = state.store.assistant_usage(user_id, period).await?;
+
+    Ok(Allowance::decide(included, usage))
+}
+
+/// `GET /v1/assistant/usage`
+///
+/// What the chat panel shows when somebody asks where they stand, and
+/// what it shows them when they have run out.
+pub async fn assistant_usage(
+    State(state): State<AppState>,
+    user: AuthenticatedUser,
+) -> ServerResult<Json<Allowance>> {
+    Ok(Json(allowance_for(&state, &user.0.id).await?))
 }
 
 // --- billing ---------------------------------------------------------------
