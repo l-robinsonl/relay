@@ -84,6 +84,7 @@ fn request_crud_round_trips_every_field() {
     let ws = seeded_workspace(&db);
 
     let mut request = RequestDoc::new(ws.id.clone(), "Create user");
+    request.kind = relay_models::RequestKind::Http;
     request.method = HttpMethod::Post;
     request.url = "{{baseUrl}}/users".into();
     request.headers = vec![KeyValue::new("Accept", "application/json")];
@@ -359,6 +360,36 @@ fn secret_environment_values_are_never_written_to_the_database() {
         .unwrap();
     assert!(secret.secret);
     assert_eq!(secret.value, "");
+}
+
+#[test]
+fn every_request_kind_survives_the_database() {
+    // Adding the `kind` column shifted every column index after it,
+    // and a positional reader that is one out does not fail — it
+    // quietly returns the neighbouring column. So this checks the
+    // kind *and* that its neighbours still arrive intact.
+    use relay_models::RequestKind;
+
+    let db = db();
+    let ws = seeded_workspace(&db);
+
+    for kind in [RequestKind::Http, RequestKind::WebSocket, RequestKind::Sse] {
+        let mut request = RequestDoc::new(ws.id.clone(), "Stream");
+        request.kind = kind;
+        request.method = HttpMethod::Post;
+        request.url = "wss://example.com/socket".into();
+        request.headers = vec![KeyValue::new("Accept", "text/event-stream")];
+
+        db.with(|c| RequestRepo::save(c, &request)).unwrap();
+        let read = db.with(|c| RequestRepo::get(c, &request.id)).unwrap();
+
+        assert_eq!(read.kind, kind);
+        // The columns either side of the new one.
+        assert_eq!(read.description, request.description);
+        assert_eq!(read.method, HttpMethod::Post, "{kind:?}");
+        assert_eq!(read.url, "wss://example.com/socket", "{kind:?}");
+        assert_eq!(read.headers.len(), 1, "{kind:?}");
+    }
 }
 
 #[test]

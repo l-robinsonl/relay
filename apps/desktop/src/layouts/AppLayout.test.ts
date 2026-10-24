@@ -51,6 +51,7 @@ const savedRequest: RequestDoc = {
   collectionId: 'c1',
   name: 'List users',
   description: '',
+  kind: 'http',
   method: 'GET',
   url: 'https://api.example.com/users',
   headers: [],

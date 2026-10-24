@@ -35,7 +35,7 @@ pub use ids::{CollectionId, EnvironmentId, ExecutionId, HistoryId, RequestId, Ta
 pub use request::{
     ApiKeyLocation, AuthConfig, ClientAuthStyle, ClientCertificate, FormField, FormValue,
     HttpMethod, OAuth2Config, OAuth2Grant, ProxyConfig, RedirectPolicy, RequestBody, RequestDoc,
-    RequestScripts, RequestSettings,
+    RequestKind, RequestScripts, RequestSettings,
 };
 pub use workspace::{Collection, Environment, SyncConfig, TreeNode, Variable, Workspace};
 

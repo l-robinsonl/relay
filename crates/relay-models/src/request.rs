@@ -476,6 +476,56 @@ impl RequestScripts {
     }
 }
 
+/// What kind of connection a saved request makes.
+///
+/// A request and a stream are the same document — same URL, headers,
+/// authentication, variables, environment — differing in what happens
+/// when you press send. Keeping them one type means a websocket
+/// inherits every one of those for free, and means history, sync and
+/// collections did not each need a second case.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+#[derive(Default)]
+pub enum RequestKind {
+    /// One request, one response.
+    #[default]
+    Http,
+    /// A websocket: open it, send and receive until one side closes.
+    #[serde(rename = "websocket")]
+    WebSocket,
+    /// Server-sent events: a GET whose body arrives as a stream of
+    /// events and does not end.
+    #[serde(rename = "sse")]
+    Sse,
+}
+
+impl RequestKind {
+    /// How it is stored.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Http => "http",
+            Self::WebSocket => "websocket",
+            Self::Sse => "sse",
+        }
+    }
+
+    /// Reads one back. Anything unrecognised is an ordinary request:
+    /// a row written by a newer build should still open.
+    pub fn parse(raw: &str) -> Self {
+        match raw {
+            "websocket" => Self::WebSocket,
+            "sse" => Self::Sse,
+            _ => Self::Http,
+        }
+    }
+
+    /// Whether this stays open rather than answering once.
+    pub fn streams(self) -> bool {
+        matches!(self, Self::WebSocket | Self::Sse)
+    }
+}
+
 /// A saved request: the unit a user names, organises and reruns.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -489,6 +539,8 @@ pub struct RequestDoc {
     pub name: String,
     #[serde(default)]
     pub description: String,
+    #[serde(default)]
+    pub kind: RequestKind,
     #[serde(default)]
     pub method: HttpMethod,
     #[serde(default)]
@@ -529,6 +581,7 @@ impl RequestDoc {
             collection_id: None,
             name: name.into(),
             description: String::new(),
+            kind: RequestKind::Http,
             method: HttpMethod::Get,
             url: String::new(),
             headers: Vec::new(),

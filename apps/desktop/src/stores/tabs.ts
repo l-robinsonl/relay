@@ -16,6 +16,7 @@ function draftDoc (workspaceId: string, collectionId: string | null = null): Req
     collectionId,
     name: 'Untitled request',
     description: '',
+    kind: 'http',
     method: 'GET',
     url: '',
     headers: [],

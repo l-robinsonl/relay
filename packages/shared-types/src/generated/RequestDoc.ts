@@ -5,6 +5,7 @@ import type { HttpMethod } from "./HttpMethod";
 import type { KeyValue } from "./KeyValue";
 import type { RequestBody } from "./RequestBody";
 import type { RequestId } from "./RequestId";
+import type { RequestKind } from "./RequestKind";
 import type { RequestScripts } from "./RequestScripts";
 import type { RequestSettings } from "./RequestSettings";
 import type { Timestamp } from "./Timestamp";
@@ -17,7 +18,7 @@ export type RequestDoc = { id: RequestId, workspaceId: WorkspaceId,
 /**
  * `None` for a request that sits directly in the workspace root.
  */
-collectionId?: CollectionId | null, name: string, description: string, method: HttpMethod, url: string, headers: Array<KeyValue>, queryParams: Array<KeyValue>, pathParams: Array<KeyValue>, body: RequestBody, auth: AuthConfig, settings: RequestSettings, scripts: RequestScripts, tags: Array<string>, 
+collectionId?: CollectionId | null, name: string, description: string, kind: RequestKind, method: HttpMethod, url: string, headers: Array<KeyValue>, queryParams: Array<KeyValue>, pathParams: Array<KeyValue>, body: RequestBody, auth: AuthConfig, settings: RequestSettings, scripts: RequestScripts, tags: Array<string>, 
 /**
  * Position among siblings. A float so that reordering by drag-and-drop
  * only rewrites the moved row instead of renumbering the whole folder.

@@ -6,8 +6,9 @@
 
 use relay_models::{
     AuthConfig, Collection, CollectionId, Environment, EnvironmentId, HistoryEntry, HistoryId,
-    HttpMethod, HttpRequestSpec, KeyValue, RequestBody, RequestDoc, RequestId, RequestScripts,
-    RequestSettings, Revision, SyncConfig, Timestamp, TreeNode, Variable, Workspace, WorkspaceId,
+    HttpMethod, HttpRequestSpec, KeyValue, RequestBody, RequestDoc, RequestId, RequestKind,
+    RequestScripts, RequestSettings, Revision, SyncConfig, Timestamp, TreeNode, Variable,
+    Workspace, WorkspaceId,
 };
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
@@ -329,7 +330,8 @@ fn map_collection(row: &Row<'_>) -> rusqlite::Result<StorageResult<Collection>> 
 /// Reads and writes saved requests.
 pub struct RequestRepo;
 
-const REQUEST_COLUMNS: &str = "id, workspace_id, collection_id, name, description, method, url,
+const REQUEST_COLUMNS: &str =
+    "id, workspace_id, collection_id, name, description, kind, method, url,
      headers_json, query_params_json, path_params_json, body_json, auth_json,
      settings_json, scripts_json, tags_json, sort_order, created_at, updated_at,
      rev, dirty, deleted_at";
@@ -369,16 +371,17 @@ impl RequestRepo {
 
         conn.execute(
             "INSERT INTO requests
-                (id, workspace_id, collection_id, name, description, method, url,
+                (id, workspace_id, collection_id, name, description, kind, method, url,
                  headers_json, query_params_json, path_params_json, body_json, auth_json,
                  settings_json, scripts_json, tags_json, sort_order, created_at, updated_at,
                  rev, dirty, deleted_at)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,1,?20)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,1,?21)
              ON CONFLICT(id) DO UPDATE SET
                 workspace_id      = excluded.workspace_id,
                 collection_id     = excluded.collection_id,
                 name              = excluded.name,
                 description       = excluded.description,
+                kind              = excluded.kind,
                 method            = excluded.method,
                 url               = excluded.url,
                 headers_json      = excluded.headers_json,
@@ -399,6 +402,7 @@ impl RequestRepo {
                 doc.collection_id.as_ref().map(|c| c.as_str()),
                 doc.name.trim(),
                 doc.description,
+                doc.kind.as_str(),
                 doc.method.as_str(),
                 doc.url,
                 encode_json("headers_json", &doc.headers)?,
@@ -488,23 +492,24 @@ fn map_request(row: &Row<'_>) -> rusqlite::Result<StorageResult<RequestDoc>> {
             collection_id: row.get::<_, Option<String>>(2)?.map(CollectionId::from),
             name: row.get(3)?,
             description: row.get(4)?,
-            method: HttpMethod::from(row.get::<_, String>(5)?),
-            url: row.get(6)?,
-            headers: decode_json("headers_json", &row.get::<_, String>(7)?)?,
-            query_params: decode_json("query_params_json", &row.get::<_, String>(8)?)?,
-            path_params: decode_json("path_params_json", &row.get::<_, String>(9)?)?,
-            body: decode_json::<RequestBody>("body_json", &row.get::<_, String>(10)?)?,
-            auth: decode_json::<AuthConfig>("auth_json", &row.get::<_, String>(11)?)?,
-            settings: decode_json::<RequestSettings>("settings_json", &row.get::<_, String>(12)?)?,
-            scripts: decode_json::<RequestScripts>("scripts_json", &row.get::<_, String>(13)?)?,
-            tags: decode_json("tags_json", &row.get::<_, String>(14)?)?,
-            sort_order: row.get(15)?,
-            created_at: Timestamp(row.get(16)?),
-            updated_at: Timestamp(row.get(17)?),
+            kind: RequestKind::parse(&row.get::<_, String>(5)?),
+            method: HttpMethod::from(row.get::<_, String>(6)?),
+            url: row.get(7)?,
+            headers: decode_json("headers_json", &row.get::<_, String>(8)?)?,
+            query_params: decode_json("query_params_json", &row.get::<_, String>(9)?)?,
+            path_params: decode_json("path_params_json", &row.get::<_, String>(10)?)?,
+            body: decode_json::<RequestBody>("body_json", &row.get::<_, String>(11)?)?,
+            auth: decode_json::<AuthConfig>("auth_json", &row.get::<_, String>(12)?)?,
+            settings: decode_json::<RequestSettings>("settings_json", &row.get::<_, String>(13)?)?,
+            scripts: decode_json::<RequestScripts>("scripts_json", &row.get::<_, String>(14)?)?,
+            tags: decode_json("tags_json", &row.get::<_, String>(15)?)?,
+            sort_order: row.get(16)?,
+            created_at: Timestamp(row.get(17)?),
+            updated_at: Timestamp(row.get(18)?),
             revision: Revision {
-                rev: row.get(18)?,
-                dirty: row.get::<_, i64>(19)? != 0,
-                deleted_at: row.get::<_, Option<i64>>(20)?.map(Timestamp),
+                rev: row.get(19)?,
+                dirty: row.get::<_, i64>(20)? != 0,
+                deleted_at: row.get::<_, Option<i64>>(21)?.map(Timestamp),
             },
         })
     })())

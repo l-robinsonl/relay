@@ -36,6 +36,7 @@ function savedDoc (over: Partial<RequestDoc> = {}): RequestDoc {
     collectionId: null,
     name: 'Saved request',
     description: '',
+  kind: 'http',
     method: 'GET',
     url: 'https://example.com',
     headers: [],
