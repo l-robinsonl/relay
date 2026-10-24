@@ -669,3 +669,23 @@ fn apply_rows(
         }
     }
 }
+
+/// One event from the stream.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ServerEvent {
+    /// The `event:` name. Servers often omit it, and the default is
+    /// `message`.
+    pub event: String,
+    /// The `data:` payload, with multiple data lines joined by
+    /// newlines as the specification requires.
+    pub data: String,
+    /// The `id:`, when the server sent one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    /// A `retry:` hint, in milliseconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(type = "number | null")]
+    pub retry_ms: Option<u64>,
+}
