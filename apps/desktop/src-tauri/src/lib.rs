@@ -118,6 +118,8 @@ pub fn run() {
             commands::sync_invitation_offer,
             commands::sync_join_invited,
             commands::graphql_schema,
+            commands::stream_open,
+            commands::stream_close,
             commands::sync_members,
             commands::sync_billing,
             commands::sync_billing_checkout,

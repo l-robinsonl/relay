@@ -6,6 +6,7 @@ function bar (props: Partial<InstanceType<typeof UrlBar>['$props']> = {}) {
   return mount(UrlBar, {
     props: {
       method: 'GET',
+      kind: 'http' as const,
       url: '',
       sending: false,
       unresolved: [],
@@ -74,5 +75,44 @@ describe('UrlBar', () => {
   it('shows a placeholder only while the URL is empty', () => {
     expect(bar().text()).toContain('Enter a URL')
     expect(bar({ url: 'https://x' }).text()).not.toContain('Enter a URL')
+  })
+
+  describe('protocols', () => {
+    // This control is the only way to reach SSE or websockets at all.
+    // Everything behind it was built and tested before anything could
+    // select it, which is a mistake this project has made before.
+    it('offers them alongside the methods', () => {
+      const options = bar().findAll('option').map((o) => o.text())
+      expect(options).toContain('SSE')
+      expect(options).toContain('WS')
+    })
+
+    it('picking one changes the kind, not the method', async () => {
+      const wrapper = bar()
+      await wrapper.find('select').setValue('sse')
+
+      expect(wrapper.emitted('update:kind')).toEqual([['sse']])
+      expect(wrapper.emitted('update:method')).toBeUndefined()
+    })
+
+    it('shows the protocol rather than the method once it is set', () => {
+      // Otherwise the control reads GET while the request is a stream.
+      const wrapper = bar({ kind: 'sse', method: 'GET' })
+      expect((wrapper.find('select').element as HTMLSelectElement).value).toBe('sse')
+    })
+
+    it('picking a verb goes back to an ordinary request', async () => {
+      const wrapper = bar({ kind: 'websocket' })
+      await wrapper.find('select').setValue('POST')
+
+      expect(wrapper.emitted('update:kind')).toEqual([['http']])
+      expect(wrapper.emitted('update:method')).toEqual([['POST']])
+    })
+
+    it('says connect and disconnect, because that is what it does', () => {
+      expect(bar({ kind: 'sse', url: 'https://x' }).text()).toContain('Connect')
+      expect(bar({ kind: 'sse', url: 'https://x', sending: true }).text())
+        .toContain('Disconnect')
+    })
   })
 })

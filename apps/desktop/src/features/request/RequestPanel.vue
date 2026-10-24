@@ -90,10 +90,12 @@ watch(
 
       <UrlBar
         :method="tab.doc.method"
+        :kind="tab.doc.kind"
         :url="tab.doc.url"
         :sending="sending"
         :unresolved="unresolved"
         @update:method="tabs.update(tab.id, { method: $event })"
+        @update:kind="tabs.update(tab.id, { kind: $event })"
         @update:url="tabs.update(tab.id, { url: $event })"
         @send="tabs.send(tab.id)"
         @cancel="tabs.cancel(tab.id)"

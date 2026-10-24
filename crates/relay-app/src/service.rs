@@ -82,6 +82,7 @@ pub struct RelayService {
     engine: HttpEngine,
     secrets: Arc<dyn SecretStore>,
     tokens: Arc<TokenCache>,
+    streams: crate::streams::Streams,
 }
 
 impl std::fmt::Debug for RelayService {
@@ -129,6 +130,7 @@ impl RelayService {
             engine,
             secrets,
             tokens: Arc::new(TokenCache::new()),
+            streams: crate::streams::Streams::new(),
         }
     }
 
@@ -391,6 +393,75 @@ impl RelayService {
             spec: resolution.spec,
             missing_variables: resolution.missing_variables,
         })
+    }
+
+    /// Opens a stream and reads it until it ends or is closed.
+    ///
+    /// Returns as soon as the connection is handed to a task, because
+    /// the whole point is that it does not finish: events arrive
+    /// through `events` and `stream_close` is how it stops.
+    pub async fn stream_open(
+        &self,
+        execution_id: relay_models::ExecutionId,
+        doc: RequestDoc,
+        environment: Option<EnvironmentId>,
+        events: Arc<dyn crate::streams::StreamSink>,
+    ) -> RelayResult<()> {
+        let context_data = self.load_scope(&doc, environment).await?;
+        let input = context_data.as_input();
+        let context = build_context(&input);
+        let spec = resolve(&doc, &input, &context).spec;
+
+        let token = self.streams.register(execution_id.clone());
+        let engine = self.engine.clone();
+        let streams = self.streams.clone();
+
+        tokio::spawn(async move {
+            events.emit(crate::streams::StreamEvent::Open {
+                execution_id: execution_id.clone(),
+            });
+
+            let sink = events.clone();
+            let id = execution_id.clone();
+            let closing = token.clone();
+
+            let outcome = relay_http::sse::stream(engine.pool(), &spec, move |event| {
+                sink.emit(crate::streams::StreamEvent::Message {
+                    execution_id: id.clone(),
+                    event,
+                    at: relay_models::Timestamp::now().as_millis(),
+                });
+                // Each event is also the moment to notice that the
+                // person has pressed stop.
+                !closing.is_cancelled()
+            })
+            .await;
+
+            streams.forget(&execution_id);
+            events.emit(crate::streams::StreamEvent::Closed {
+                execution_id,
+                // Being closed on purpose is not an error, and
+                // reporting it as one would put a red box on screen
+                // every time somebody pressed stop.
+                error: match outcome {
+                    Ok(()) => None,
+                    Err(_) if token.is_cancelled() => None,
+                    Err(e) => Some(e.to_string()),
+                },
+            });
+        });
+
+        Ok(())
+    }
+
+    /// Closes a stream. Says whether one was open.
+    pub fn stream_close(&self, execution_id: &relay_models::ExecutionId) -> bool {
+        self.streams.close(execution_id)
+    }
+
+    /// Closes every stream.
+    pub fn streams_close_all(&self) {
+        self.streams.close_all();
     }
 
     /// What the UI shows about a request's OAuth token.

@@ -74,6 +74,15 @@ pub struct HttpEngine {
 }
 
 impl HttpEngine {
+    /// The shared client pool.
+    ///
+    /// Exposed for streaming connections, which do not go through
+    /// `send` but must reuse the same clients so that TLS settings,
+    /// proxies and the cookie jar apply to them too.
+    pub fn pool(&self) -> &ClientPool {
+        &self.pool
+    }
+
     /// Builds an engine with the given configuration.
     pub fn new(config: EngineConfig) -> Self {
         Self {

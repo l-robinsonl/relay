@@ -857,6 +857,50 @@ pub async fn sync_revoke_invitation(
         .await
 }
 
+// --- streams ---------------------------------------------------------------
+
+/// The channel carrying stream events to the webview.
+pub const STREAM_EVENT: &str = "relay://stream";
+
+/// Forwards stream events to the window.
+struct WindowStream {
+    app: tauri::AppHandle,
+}
+
+impl relay_app::streams::StreamSink for WindowStream {
+    fn emit(&self, event: relay_app::streams::StreamEvent) {
+        let _ = self.app.emit(STREAM_EVENT, event);
+    }
+}
+
+/// Opens a stream. Returns as soon as it is running, not when it ends.
+#[tauri::command]
+pub async fn stream_open(
+    app: tauri::AppHandle,
+    service: State<'_, RelayService>,
+    execution_id: relay_models::ExecutionId,
+    doc: relay_models::RequestDoc,
+    environment: Option<relay_models::EnvironmentId>,
+) -> RelayResult<()> {
+    service
+        .stream_open(
+            execution_id,
+            doc,
+            environment,
+            std::sync::Arc::new(WindowStream { app }),
+        )
+        .await
+}
+
+/// Closes a stream. Says whether one was open.
+#[tauri::command]
+pub fn stream_close(
+    service: State<'_, RelayService>,
+    execution_id: relay_models::ExecutionId,
+) -> bool {
+    service.stream_close(&execution_id)
+}
+
 // --- the assistant ---------------------------------------------------------
 
 /// The channel carrying assistant progress to the webview.

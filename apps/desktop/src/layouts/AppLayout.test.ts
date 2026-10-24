@@ -97,6 +97,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock('@/services/ipc', () => ({
   api: mocks,
   onExecutionProgress: vi.fn().mockResolvedValue(() => {}),
+  onStreamEvent: vi.fn().mockResolvedValue(() => {}),
   onSyncEvent: vi.fn().mockResolvedValue(() => {}),
   isRelayError: () => false,
   toRelayError: (e: unknown) => ({ kind: 'internal', message: String(e) }),
@@ -232,6 +233,18 @@ describe('the application shell', () => {
     const wrapper = await mountApp()
     // Running without a server is the normal case, not a failure state.
     expect(wrapper.text()).toContain('Local only')
+  })
+
+  it('still opens an editor when a listener cannot be registered', async () => {
+    // These used to be a chain of awaits, so one failing registration
+    // skipped the line that opens a tab: a blank window, no message.
+    const ipc = await import('@/services/ipc')
+    vi.mocked(ipc.onExecutionProgress).mockRejectedValueOnce(new Error('no such event'))
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    const wrapper = await mountApp()
+
+    expect(wrapper.find('section[aria-label="Request"]').exists()).toBe(true)
   })
 
   it('renders the split panes with a keyboard-resizable divider', async () => {

@@ -18,6 +18,7 @@ import TestResults from '@/features/response/TestResults.vue'
 import { formatBody, formatBytes, formatDuration } from '@/composables/useFormat'
 import { describeShortcut } from '@/composables/useShortcuts'
 import { useTabsStore } from '@/stores/tabs'
+import StreamLog from '@/features/response/StreamLog.vue'
 
 const props = defineProps<{ tab: Tab }>()
 
@@ -96,7 +97,22 @@ const sendShortcut = describeShortcut({ key: 'Enter', mod: true })
 </script>
 
 <template>
-  <section class="flex h-full min-h-0 flex-col surface-base" aria-label="Response">
+  <!-- A connection has no single response, so it gets the log
+       instead of the status bar, tabs and body viewer below. -->
+  <section
+    v-if="tab.doc.kind !== 'http'"
+    class="flex h-full min-h-0 flex-col surface-base"
+    aria-label="Stream"
+  >
+    <StreamLog
+      :lines="tab.stream"
+      :live="tab.streaming"
+      :error="tab.streamError"
+      @clear="tabs.clearStream(tab.id)"
+    />
+  </section>
+
+  <section v-else class="flex h-full min-h-0 flex-col surface-base" aria-label="Response">
     <!-- Status bar -->
     <div
       class="flex h-9 shrink-0 items-center gap-3 border-b border-subtle px-3"

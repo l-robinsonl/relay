@@ -15,6 +15,7 @@ import type {
   RelayError,
   RequestDoc,
   Schema,
+  StreamEvent,
   Role,
   UserProfile,
   TreeNode,
@@ -333,6 +334,17 @@ export const api = {
   /** Progress while a turn runs. Returns an unsubscribe function. */
   onAssistantEvent: (handler: (event: AssistantEvent) => void): Promise<UnlistenFn> =>
     listen<AssistantEvent>('relay://assistant', (e) => handler(e.payload)),
+
+  // --- streams -------------------------------------------------------------
+  /** Opens a stream. Resolves once it is running, not when it ends. */
+  streamOpen: (executionId: string, doc: RequestDoc, environment: string | null) =>
+    call<void>('stream_open', { executionId, doc, environment }),
+  /** Closes a stream. Says whether one was open. */
+  streamClose: (executionId: string) =>
+    call<boolean>('stream_close', { executionId }),
+  /** Events from every open stream. Returns an unsubscribe function. */
+  onStreamEvent: (handler: (event: StreamEvent) => void): Promise<UnlistenFn> =>
+    listen<StreamEvent>('relay://stream', (e) => handler(e.payload)),
 
   /** Asks a GraphQL endpoint what it accepts. */
   graphqlSchema: (doc: RequestDoc, environment: string | null) =>

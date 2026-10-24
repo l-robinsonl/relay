@@ -10,11 +10,14 @@ const mocks = vi.hoisted(() => ({
   httpSend: vi.fn(),
   httpSendWithTests: vi.fn(),
   httpCancel: vi.fn(),
+  streamOpen: vi.fn(),
+  streamClose: vi.fn(),
 }))
 
 vi.mock('@/services/ipc', () => ({
   api: mocks,
   onExecutionProgress: vi.fn().mockResolvedValue(() => {}),
+  onStreamEvent: vi.fn().mockResolvedValue(() => {}),
   isRelayError: () => false,
   toRelayError: (e: unknown) => ({ kind: 'internal', message: String(e) }),
 }))
@@ -36,7 +39,7 @@ function savedDoc (over: Partial<RequestDoc> = {}): RequestDoc {
     collectionId: null,
     name: 'Saved request',
     description: '',
-  kind: 'http',
+    kind: 'http',
     method: 'GET',
     url: 'https://example.com',
     headers: [],
@@ -315,5 +318,119 @@ describe('sending', () => {
 
     // A failure must not leave the Send button stuck showing Cancel.
     expect(tabs.tabs[0]!.executionId).toBeNull()
+  })
+})
+
+describe('streams', () => {
+  function streamTab () {
+    const tabs = useTabsStore()
+    const tab = tabs.openDraft()!
+    tabs.update(tab.id, { kind: 'sse', url: 'https://example.com/events' })
+    return { tabs, tab }
+  }
+
+  it('send opens a connection rather than making a request', async () => {
+    const { tabs, tab } = streamTab()
+
+    await tabs.send(tab.id)
+
+    expect(mocks.streamOpen).toHaveBeenCalled()
+    expect(mocks.httpSendWithTests).not.toHaveBeenCalled()
+    expect(tabs.tabs[0]!.streaming).toBe(true)
+  })
+
+  it('stopping one closes it, and does not try to cancel a request', async () => {
+    // `http_cancel` has never heard of a stream: routing a stop through
+    // it looks like it worked and leaves the connection open.
+    const { tabs, tab } = streamTab()
+    await tabs.send(tab.id)
+    const executionId = tabs.tabs[0]!.executionId
+
+    await tabs.cancel(tab.id)
+
+    expect(mocks.streamClose).toHaveBeenCalledWith(executionId)
+    expect(mocks.httpCancel).not.toHaveBeenCalled()
+  })
+
+  it('pressing send again closes an open connection', async () => {
+    const { tabs, tab } = streamTab()
+    await tabs.send(tab.id)
+    const executionId = tabs.tabs[0]!.executionId
+
+    await tabs.toggleStream(tab.id)
+
+    expect(mocks.streamClose).toHaveBeenCalledWith(executionId)
+    expect(mocks.streamOpen).toHaveBeenCalledTimes(1)
+  })
+
+  it('an arriving event lands in the tab that opened the stream', async () => {
+    const { tabs, tab } = streamTab()
+    await tabs.send(tab.id)
+    const executionId = tabs.tabs[0]!.executionId!
+
+    tabs.applyStreamEvent({
+      type: 'message',
+      executionId,
+      at: 1700000000000,
+      event: { event: 'price', data: '42', id: '7', retryMs: null },
+    })
+
+    expect(tabs.tabs[0]!.stream).toHaveLength(1)
+    expect(tabs.tabs[0]!.stream[0]!.event.data).toBe('42')
+  })
+
+  it('an event for a stream nobody is watching is dropped, not thrown', () => {
+    const tabs = useTabsStore()
+    tabs.openDraft()
+
+    expect(() => tabs.applyStreamEvent({
+      type: 'closed',
+      executionId: 'not-a-tab',
+      error: null,
+    })).not.toThrow()
+  })
+
+  it('closing badly shows why, and stops showing it as live', async () => {
+    const { tabs, tab } = streamTab()
+    await tabs.send(tab.id)
+    const executionId = tabs.tabs[0]!.executionId!
+
+    tabs.applyStreamEvent({
+      type: 'closed',
+      executionId,
+      error: 'the endpoint answered 503 Service Unavailable',
+    })
+
+    expect(tabs.tabs[0]!.streaming).toBe(false)
+    expect(tabs.tabs[0]!.streamError).toContain('503')
+    // And the id is released, so send can open a new one.
+    expect(tabs.tabs[0]!.executionId).toBeNull()
+  })
+
+  it('changing the protocol closes whatever was connected', async () => {
+    const { tabs, tab } = streamTab()
+    await tabs.send(tab.id)
+    const executionId = tabs.tabs[0]!.executionId
+
+    tabs.update(tab.id, { kind: 'http' })
+
+    expect(mocks.streamClose).toHaveBeenCalledWith(executionId)
+  })
+
+  it('clearing the log keeps the connection', async () => {
+    const { tabs, tab } = streamTab()
+    await tabs.send(tab.id)
+    tabs.applyStreamEvent({
+      type: 'message',
+      executionId: tabs.tabs[0]!.executionId!,
+      at: 1,
+      event: { event: 'message', data: 'x', id: null, retryMs: null },
+    })
+
+    tabs.clearStream(tab.id)
+
+    expect(tabs.tabs[0]!.stream).toHaveLength(0)
+    expect(tabs.tabs[0]!.streaming).toBe(true)
+    expect(mocks.streamClose).not.toHaveBeenCalled()
   })
 })

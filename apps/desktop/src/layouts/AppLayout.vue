@@ -45,6 +45,7 @@ const importOpen = ref(false)
 const syncSettingsOpen = ref(false)
 const conflictsOpen = ref(false)
 let unlistenProgress: UnlistenFn | undefined
+let unlistenStreams: UnlistenFn | undefined
 let unlistenSync: UnlistenFn | undefined
 
 /** Pastes a cURL command from the clipboard into a new tab. */
@@ -242,21 +243,44 @@ const commands = computed<Command[]>(() => {
   return [...requests, ...actions, ...themeCommands]
 })
 
+/**
+ * Starts something that is not worth a blank window.
+ *
+ * The mount hook is a chain of awaits, so before this every step was
+ * load-bearing: one listener failing to register took the rest of the
+ * hook down with it — including the line that opens a tab, leaving an
+ * empty editor and no clue why. Progress, streams and sync are all
+ * things the application is useful without.
+ */
+async function optional<T> (what: string, start: () => Promise<T>) {
+  try {
+    return await start()
+  } catch (error) {
+    console.error(`${what} could not be started`, error)
+    return undefined
+  }
+}
+
 onMounted(async () => {
   await settings.load()
   await workspace.initialise()
-  unlistenProgress = await tabs.watchProgress()
-
-  await sync.refresh()
-  unlistenSync = await sync.listenForChanges()
-  await sync.watch()
 
   // Open something rather than greeting the user with a blank editor.
   if (!tabs.tabs.length) tabs.openDraft()
+
+  unlistenProgress = await optional('Request progress', () => tabs.watchProgress())
+  unlistenStreams = await optional('Stream events', () => tabs.watchStreams())
+
+  await optional('Sync', async () => {
+    await sync.refresh()
+    unlistenSync = await sync.listenForChanges()
+    await sync.watch()
+  })
 })
 
 onBeforeUnmount(() => {
   unlistenProgress?.()
+  unlistenStreams?.()
   unlistenSync?.()
   void sync.unwatch()
 })

@@ -3,6 +3,7 @@ import { computed, ref } from 'vue'
 import type { HttpExchange, RequestDoc } from '@relay/shared-types'
 import type { RequestSection, ResponseTab, Tab, TabResult } from '@/types/ui'
 import type { ScriptOutcome } from '@/services/ipc'
+import type { StreamEvent } from '@relay/shared-types'
 import { api, onExecutionProgress } from '@/services/ipc'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { useToastStore } from '@/stores/toast'
@@ -62,6 +63,9 @@ function newTab (doc: RequestDoc, requestId: string | null): Tab {
     bytesRead: 0,
     activeSection: 'params',
     activeResponseTab: 'body',
+    stream: [],
+    streaming: false,
+    streamError: null,
     tests: null,
   }
 }
@@ -139,8 +143,16 @@ export const useTabsStore = defineStore('tabs', () => {
   }
 
   function update (tabId: string, patch: Partial<RequestDoc>) {
-    tabs.value = tabs.value.map((tab) =>
-      tab.id === tabId ? { ...tab, doc: { ...tab.doc, ...patch } } : tab,
+    const tab = tabs.value.find((t) => t.id === tabId)
+    // Changing the protocol while something is connected would strand
+    // it: the stop button reads the kind to decide how to stop, so a
+    // switch to GET leaves a live stream nothing can reach.
+    if (tab && patch.kind && patch.kind !== tab.doc.kind && tab.executionId) {
+      void cancel(tabId)
+    }
+
+    tabs.value = tabs.value.map((t) =>
+      t.id === tabId ? { ...t, doc: { ...t.doc, ...patch } } : t,
     )
   }
 
@@ -175,9 +187,79 @@ export const useTabsStore = defineStore('tabs', () => {
   }
 
   /** Sends the tab's request. */
+  /**
+   * Opens a stream, or closes one that is already open.
+   *
+   * Send and stop are the same button for a connection: there is no
+   * other moment at which somebody wants to end it, and a separate
+   * stop button would sit disabled almost all the time.
+   */
+  async function toggleStream (tabId: string) {
+    const tab = tabs.value.find((t) => t.id === tabId)
+    if (!tab) return
+
+    if (tab.executionId) {
+      await api.streamClose(tab.executionId)
+      return
+    }
+
+    if (!tab.doc.url.trim()) {
+      toasts.warn('Enter a URL before connecting')
+      return
+    }
+
+    const executionId = crypto.randomUUID()
+    patchTab(tabId, { executionId, streaming: true, streamError: null })
+
+    try {
+      await api.streamOpen(executionId, tab.doc, workspace.activeEnvironmentId)
+    } catch (error) {
+      patchTab(tabId, { executionId: null, streaming: false })
+      toasts.error('The connection could not be opened', error)
+    }
+  }
+
+  /** Applies a stream event to whichever tab is running it. */
+  function applyStreamEvent (event: StreamEvent) {
+    const tab = tabs.value.find((t) => t.executionId === event.executionId)
+    if (!tab) return
+
+    switch (event.type) {
+      case 'open':
+        patchTab(tab.id, { streaming: true, streamError: null })
+        break
+      case 'message':
+        // A long-running stream would otherwise grow without bound
+        // and take the window down with it. The newest are the ones
+        // being read.
+        patchTab(tab.id, {
+          stream: [...tab.stream, { at: event.at, event: event.event }].slice(-2000),
+        })
+        break
+      case 'closed':
+        patchTab(tab.id, {
+          executionId: null,
+          streaming: false,
+          streamError: event.error ?? null,
+        })
+        break
+    }
+  }
+
+  function clearStream (tabId: string) {
+    patchTab(tabId, { stream: [], streamError: null })
+  }
+
   async function send (tabId: string) {
     const tab = tabs.value.find((t) => t.id === tabId)
     if (!tab || tab.executionId) return
+
+    // A connection is not a request: it has no single response, and
+    // the same button opens and closes it.
+    if (tab.doc.kind !== 'http') {
+      await toggleStream(tabId)
+      return
+    }
 
     if (!tab.doc.url.trim()) {
       toasts.warn('Enter a URL before sending')
@@ -226,6 +308,12 @@ export const useTabsStore = defineStore('tabs', () => {
   async function cancel (tabId: string) {
     const tab = tabs.value.find((t) => t.id === tabId)
     if (!tab?.executionId) return
+    // A stream is not cancelled, it is closed — and `http_cancel` has
+    // never heard of it, so stopping one would silently do nothing.
+    if (tab.doc.kind !== 'http') {
+      await api.streamClose(tab.executionId)
+      return
+    }
     await api.httpCancel(tab.executionId)
   }
 
@@ -255,6 +343,11 @@ export const useTabsStore = defineStore('tabs', () => {
     })
   }
 
+  /** Starts forwarding stream events into the matching tab. */
+  async function watchStreams () {
+    return api.onStreamEvent(applyStreamEvent)
+  }
+
   /** Forgets a closed request's tab, after it is deleted elsewhere. */
   function closeByRequestId (requestId: string) {
     const tab = tabs.value.find((t) => t.requestId === requestId)
@@ -279,6 +372,10 @@ export const useTabsStore = defineStore('tabs', () => {
     scriptPassed,
     save,
     send,
+    toggleStream,
+    watchStreams,
+    applyStreamEvent,
+    clearStream,
     cancel,
     watchProgress,
   }

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { Loader2, Send, Square } from '@lucide/vue'
+import type { RequestKind } from '@relay/shared-types'
 import { methodColor } from '@/composables/useFormat'
 
 /**
@@ -13,6 +14,7 @@ import { methodColor } from '@/composables/useFormat'
  */
 const props = defineProps<{
   method: string
+  kind: RequestKind
   url: string
   sending: boolean
   unresolved: string[]
@@ -20,6 +22,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   'update:method': [string]
+  'update:kind': [RequestKind]
   'update:url': [string]
   send: []
   cancel: []
@@ -27,12 +30,50 @@ const emit = defineEmits<{
 
 const METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS']
 
+/**
+ * Protocols, in the same control as the methods.
+ *
+ * They occupy the same slot because they answer the same question —
+ * what kind of call is this — and because a method means nothing for
+ * a connection: server-sent events is always a GET, and a websocket
+ * has no method at all.
+ */
+const KINDS: { id: RequestKind; label: string }[] = [
+  { id: 'sse', label: 'SSE' },
+  { id: 'websocket', label: 'WS' },
+]
+
+/** What the selector shows: a protocol if there is one, else the method. */
+const selected = computed(() =>
+  props.kind === 'http' ? props.method : props.kind,
+)
+
+function choose (value: string) {
+  if (value === '__custom__') {
+    customMethod.value = true
+    return
+  }
+  const protocol = KINDS.find((k) => k.id === value)
+  if (protocol) {
+    emit('update:kind', protocol.id)
+    return
+  }
+  // Back to an ordinary request, whichever verb was picked.
+  if (props.kind !== 'http') emit('update:kind', 'http')
+  emit('update:method', value)
+}
+
+/** A connection is opened and closed, not sent and cancelled. */
+const streams = computed(() => props.kind !== 'http')
+
 const customMethod = ref(false)
 const mirror = ref<HTMLDivElement | null>(null)
 
 const color = computed(() => methodColor(props.method))
 
-const isKnownMethod = computed(() => METHODS.includes(props.method.toUpperCase()))
+const isKnownMethod = computed(
+  () => props.kind !== 'http' || METHODS.includes(props.method.toUpperCase()),
+)
 
 /** The URL split into literal text and variable references. */
 const segments = computed(() => {
@@ -84,16 +125,17 @@ function syncScroll (event: Event) {
         v-else
         class="input w-28 cursor-pointer font-mono font-semibold"
         :style="{ color }"
-        :value="method"
-        aria-label="HTTP method"
-        @change="
-          ($event.target as HTMLSelectElement).value === '__custom__'
-            ? (customMethod = true)
-            : emit('update:method', ($event.target as HTMLSelectElement).value)
-        "
+        :value="selected"
+        aria-label="Method or protocol"
+        @change="choose(($event.target as HTMLSelectElement).value)"
       >
         <option v-for="item in METHODS" :key="item" :value="item">{{ item }}</option>
         <option value="__custom__">Custom…</option>
+        <optgroup label="Streams">
+          <option v-for="item in KINDS" :key="item.id" :value="item.id">
+            {{ item.label }}
+          </option>
+        </optgroup>
       </select>
     </div>
 
@@ -143,7 +185,7 @@ function syncScroll (event: Event) {
       @click="emit('cancel')"
     >
       <Square :size="13" fill="currentColor" />
-      Cancel
+      {{ streams ? 'Disconnect' : 'Cancel' }}
     </button>
     <button
       v-else
@@ -154,7 +196,7 @@ function syncScroll (event: Event) {
     >
       <Loader2 v-if="sending" :size="14" class="animate-spin" />
       <Send v-else :size="13" />
-      Send
+      {{ streams ? 'Connect' : 'Send' }}
     </button>
   </div>
 </template>
