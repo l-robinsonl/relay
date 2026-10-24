@@ -14,6 +14,7 @@ import { api } from '@/services/ipc'
 import { useWorkspaceStore } from '@/stores/workspace'
 import AssistantSettingsDialog from './AssistantSettings.vue'
 import ToolCallRow from './ToolCallRow.vue'
+import { providerLabel } from './providers'
 
 const workspace = useWorkspaceStore()
 
@@ -287,7 +288,7 @@ defineExpose({ hydrate, startOver })
         class="mb-2 rounded border p-2 text-xs text-muted"
         :style="{ borderColor: 'var(--border-default)' }"
       >
-        No API key is set for {{ settings.provider }}.
+        No API key is set for {{ providerLabel(settings.provider) }}.
         <button type="button" class="underline underline-offset-2" @click="settingsOpen = true">
           Add one
         </button>

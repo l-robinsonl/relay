@@ -3,6 +3,7 @@ import { computed, ref, watch } from 'vue'
 import { Check, Eye, EyeOff, Loader2, Sparkles, X } from '@lucide/vue'
 import type { AssistantSettings } from '@/services/ipc'
 import { api } from '@/services/ipc'
+import { PROVIDERS } from './providers'
 import McpServers from './McpServers.vue'
 
 const props = defineProps<{ open: boolean, modelValue: AssistantSettings }>()
@@ -11,26 +12,6 @@ const emit = defineEmits<{
   'update:modelValue': [AssistantSettings]
 }>()
 
-const PROVIDERS = [
-  {
-    id: 'anthropic' as const,
-    label: 'Claude',
-    placeholder: 'claude-opus-5-5',
-    help: 'Keys from console.anthropic.com.',
-  },
-  {
-    id: 'openai' as const,
-    label: 'OpenAI',
-    placeholder: 'gpt-5',
-    help: 'Keys from platform.openai.com.',
-  },
-  {
-    id: 'compatible' as const,
-    label: 'Something else',
-    placeholder: 'the model name that endpoint expects',
-    help: 'Anything speaking the OpenAI chat-completions shape — Ollama, LM Studio, OpenRouter, Groq. A local endpoint usually needs no key at all.',
-  },
-]
 
 const key = ref('')
 const showKey = ref(false)

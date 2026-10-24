@@ -368,18 +368,24 @@ like there.
 [width] [height]` runs a component's `*.shot.test.ts`, renders the
 markup against the real built stylesheet at a realistic width, and
 photographs both themes. Cameras are skipped unless `RELAY_SHOTS=1`.
-Six panels have been through it: billing, the tool approval row, test
-results, members, MCP servers, assistant settings. Four real bugs came
-out of looking, none of which any test would have caught.
+Nine panels have been through it: billing, the tool approval row,
+test results, members, MCP servers, assistant settings, the chat
+panel, conflicts and the scripts editor. Five real bugs came out of
+looking, none of which any test would have caught. Still unphotographed:
+the invited-join tab and the request/response editors.
 
 Two things it cannot see, both already paid for:
 
-- **A `<select>` bound with `:value` always photographs as its first
-  option.** The value lives in a DOM property and `wrapper.html()`
-  serialises attributes. MembersPanel appeared to report every member
-  as a Viewer and is correct in a browser. Check
-  `(el as HTMLSelectElement).value` in a test before believing a
-  photograph. Same for scroll, focus, `:hover` and mid-animation.
+- **Anything held in a DOM property is invisible to it.**
+  `wrapper.html()` serialises attributes, so `<select :value>`
+  photographs as its first option and `<textarea :value>` photographs
+  empty — MembersPanel looked like it called everyone a Viewer, and
+  ScriptsEditor looked like it had lost the script. Both are correct
+  in a browser. A lazily mounted editor such as CodeMirror is not in
+  the shot at all. Same for scroll, focus, `:hover` and
+  mid-animation. **Three of the four alarms this camera has raised
+  were itself.** Assert on the real value in a test before changing
+  anything.
 - **Every dialog here teleports to `body`**, so `wrapper.html()`
   catches an empty shell. `src/features/shots.ts` has `rendered()`,
   which picks up teleported content; mount with
@@ -388,11 +394,11 @@ Two things it cannot see, both already paid for:
 
 ## Next
 
-1. Finish looking at the UI built blind. Photographed and fixed:
-   billing, tool approval, test results, members, MCP servers,
-   assistant settings. Still unseen: the chat panel itself, the
-   conflict panel, the scripts editor, the invited-join tab and the
-   request/response editors.
+1. Deploy, which is the only item left that changes what Relay *is*.
+   Sync has never crossed a network: two machines have never synced,
+   and accounts, invitations and billing have never been used by two
+   people at once. `render.yaml` and `deploy/compose.prod.yml` are
+   ready and neither has run in anger. Needs a host and a DNS name.
 2. Deploy. The only things between here and a usable Relay Cloud are
    a host and a DNS name; `render.yaml` and `deploy/compose.prod.yml`
    are both ready and neither has been run in anger.

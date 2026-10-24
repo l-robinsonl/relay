@@ -19,15 +19,25 @@
 # Needs `npm run build` to have produced dist/assets/*.css at least
 # once, and google-chrome on PATH.
 #
-# What it cannot see. The picture is serialised HTML, so anything
-# living in a DOM *property* rather than an attribute is missing from
-# it. The one that bites: a `<select>` bound with `:value` shows its
-# first option in every shot, however the real control behaves —
-# MembersPanel looked like it reported every member as a Viewer, and
-# in a browser it is correct. Check with
-# `(el as HTMLSelectElement).value` in a test before believing the
-# photograph. The same goes for scroll position, focus, :hover, and
-# anything a CSS animation is mid-way through.
+# What it cannot see, and this has now produced three false alarms.
+# The picture is serialised HTML, so anything living in a DOM
+# *property* rather than an attribute is simply absent from it:
+#
+#   <select :value>    photographs as its first option, always.
+#                      MembersPanel looked like it called every member
+#                      a Viewer; in a browser it is correct.
+#   <textarea :value>  photographs empty, always. ScriptsEditor looked
+#                      like it had lost the script.
+#   anything lazy      CodeMirror and friends mount after paint and are
+#                      not in the shot at all.
+#
+# Also invisible: scroll position, focus, :hover, and anything a CSS
+# animation is part-way through.
+#
+# Before "fixing" something a photograph says is broken, assert on the
+# real thing in a test — `(el as HTMLTextAreaElement).value` — and only
+# then believe it. Three times out of four so far, the component was
+# fine and the camera was lying.
 set -euo pipefail
 
 TARGET="${1:?usage: shoot-ui.sh <feature/Component> [panel-width]}"
