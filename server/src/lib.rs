@@ -4,6 +4,7 @@
 #![warn(missing_docs)]
 
 pub mod app;
+pub mod assistant;
 pub mod auth;
 pub mod billing;
 pub mod config;

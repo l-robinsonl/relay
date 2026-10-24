@@ -79,6 +79,15 @@ pub enum ServerError {
     #[error("Stripe refused the request: {0}")]
     Stripe(String),
 
+    /// The model provider refused, or could not be reached.
+    ///
+    /// Keeps its detail in `Display` for the same reason as
+    /// [`Self::Stripe`]: an expired key or a retired model is the
+    /// operator's whole diagnosis, and none of it is the
+    /// conversation. Clients get a flat `Internal`.
+    #[error("the assistant provider failed: {0}")]
+    Assistant(String),
+
     /// The server is misconfigured.
     ///
     /// Keeps its message, unlike [`Self::Internal`]: this is reported to
@@ -108,6 +117,7 @@ impl ServerError {
             | Self::Internal(_)
             | Self::Mail(_)
             | Self::Stripe(_)
+            | Self::Assistant(_)
             | Self::Config(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -141,6 +151,7 @@ impl ServerError {
             | Self::Internal(_)
             | Self::Mail(_)
             | Self::Stripe(_)
+            | Self::Assistant(_)
             | Self::Config(_) => SyncError::Internal,
         }
     }
@@ -154,6 +165,7 @@ impl IntoResponse for ServerError {
                 | ServerError::PasswordHash(_)
                 | ServerError::Internal(_)
                 | ServerError::Stripe(_)
+                | ServerError::Assistant(_)
                 | ServerError::Config(_)
         ) {
             tracing::error!("{self}");

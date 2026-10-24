@@ -32,6 +32,8 @@ pub struct AppState {
     pub stripe: Option<Arc<crate::billing::stripe::Stripe>>,
     /// Throttles the routes that cost something to abuse.
     pub limiter: crate::ratelimit::RateLimiter,
+    /// The model provider, when this deployment hosts the assistant.
+    pub assistant: Option<Arc<crate::assistant::Assistant>>,
 }
 
 impl std::fmt::Debug for AppState {
@@ -82,6 +84,23 @@ impl AppState {
             })
             .map(Arc::new);
 
+        // Both halves required, like Stripe: a key with no price to
+        // sell it against hands model usage to everybody.
+        let assistant = config
+            .hosts_assistant()
+            .then(|| {
+                crate::assistant::Assistant::new(
+                    config.assistant_key.clone().unwrap_or_default(),
+                    config.assistant_model.clone(),
+                )
+            })
+            .transpose()
+            .unwrap_or_else(|error| {
+                tracing::error!(%error, "the assistant is misconfigured; it will not be hosted");
+                None
+            })
+            .map(Arc::new);
+
         Self {
             store,
             hub: Hub::new(),
@@ -89,6 +108,7 @@ impl AppState {
             mailer,
             stripe,
             limiter: crate::ratelimit::RateLimiter::new(),
+            assistant,
         }
     }
 
@@ -226,6 +246,7 @@ pub fn router(state: AppState) -> Router {
             post(routes::billing_portal),
         )
         .route("/v1/assistant/usage", get(routes::assistant_usage))
+        .route("/v1/assistant/messages", post(routes::assistant_messages))
         .route("/v1/billing/webhook", post(routes::billing_webhook))
         // Where Stripe returns the browser. Named in every checkout
         // session, so they have to exist.

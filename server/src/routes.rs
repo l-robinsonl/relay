@@ -591,6 +591,55 @@ pub async fn allowance_for(state: &AppState, user_id: &str) -> ServerResult<Allo
     Ok(Allowance::decide(included, usage))
 }
 
+/// `POST /v1/assistant/messages`
+///
+/// One request against the model, on Relay's key, for a subscriber
+/// whose plan includes it. The loop stays on their machine; this is
+/// the step that costs money, and so the step that is counted.
+pub async fn assistant_messages(
+    State(state): State<AppState>,
+    user: AuthenticatedUser,
+    Json(turn): Json<crate::assistant::TurnRequest>,
+) -> ServerResult<Json<crate::assistant::TurnResponse>> {
+    let assistant = state
+        .assistant
+        .as_ref()
+        .ok_or_else(|| ServerError::BadRequest("this server does not host the assistant".into()))?;
+
+    let allowance = allowance_for(&state, &user.0.id).await?;
+    if !allowance.allowed {
+        // 402, like the seat limit: this is a limit reached, not a
+        // malformed request, and the notice says their own key works
+        // with no limit at all.
+        return Err(ServerError::LimitExceeded {
+            limit: "assistantTurns",
+            message: allowance
+                .notice
+                .unwrap_or_else(|| "No assistant requests left this month.".into()),
+        });
+    }
+
+    let answer = assistant.run(&turn).await?;
+
+    // Recorded after the fact, from what the provider says it cost.
+    // A turn that generated tokens is billed whether or not the
+    // caller is still listening, because the provider bills it
+    // either way and not counting it is an obvious hole.
+    let period = crate::billing::period_start(Timestamp::now().as_millis());
+    if let Err(error) = state
+        .store
+        .record_assistant_turn(&user.0.id, period, answer.usage)
+        .await
+    {
+        // Losing the count must not lose the answer the person has
+        // already paid for. Loud, because a limiter that silently
+        // stops counting is worse than no limiter.
+        tracing::error!(%error, user = %user.0.id, "could not record assistant usage");
+    }
+
+    Ok(Json(answer))
+}
+
 /// `GET /v1/assistant/usage`
 ///
 /// What the chat panel shows when somebody asks where they stand, and

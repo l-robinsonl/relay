@@ -1918,6 +1918,249 @@ async fn usage_needs_a_session() {
     assert_eq!(server.get("/v1/assistant/usage").await.status(), 401);
 }
 
+/// A stand-in for Anthropic, recording what it was asked for.
+struct StubModel {
+    base: String,
+    calls: Arc<std::sync::Mutex<Vec<Value>>>,
+    handle: tokio::task::JoinHandle<()>,
+}
+
+impl Drop for StubModel {
+    fn drop(&mut self) {
+        self.handle.abort();
+    }
+}
+
+impl StubModel {
+    async fn start() -> Self {
+        let calls: Arc<std::sync::Mutex<Vec<Value>>> = Arc::default();
+        let recorder = calls.clone();
+
+        let app = axum::Router::new().fallback(axum::routing::any(
+            move |axum::Json(body): axum::Json<Value>| {
+                let recorder = recorder.clone();
+                async move {
+                    recorder.lock().unwrap().push(body);
+                    axum::Json(json!({
+                        "content": [{ "type": "text", "text": "Four of them do." }],
+                        "stop_reason": "end_turn",
+                        "usage": {
+                            "input_tokens": 1200,
+                            "output_tokens": 300,
+                            "cache_read_input_tokens": 5000,
+                        },
+                    }))
+                }
+            },
+        ));
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handle = tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+
+        Self {
+            base: format!("http://{addr}"),
+            calls,
+            handle,
+        }
+    }
+
+    fn last(&self) -> Value {
+        self.calls.lock().unwrap().last().cloned().expect("no call")
+    }
+
+    fn count(&self) -> usize {
+        self.calls.lock().unwrap().len()
+    }
+}
+
+/// A server hosting the assistant, pointed at a stub model.
+async fn start_with_model(stub: &StubModel) -> TestServer {
+    let store = SqliteStore::connect("sqlite::memory:").await.unwrap();
+    store.migrate().await.unwrap();
+
+    let config = Config {
+        public_url: "https://relay.test".into(),
+        signup_mode: SignupMode::Open,
+        session_ttl: std::time::Duration::from_secs(3600),
+        stripe_secret_key: Some("sk_test_whatever".into()),
+        stripe_webhook_secret: Some(WEBHOOK_SECRET.into()),
+        stripe_price_sync_annual: Some("price_sync".into()),
+        stripe_price_assistant_annual: Some("price_with_ai".into()),
+        assistant_key: Some("sk-ant-not-real".into()),
+        assistant_turns: 2,
+        ..Config::default()
+    };
+
+    let mail = Arc::new(relay_server::mail::CapturingMailer::new());
+    let store: Arc<dyn SyncStore> = Arc::new(store);
+    let mut state = AppState::with_mailer(store.clone(), config, mail.clone());
+    state.assistant = Some(Arc::new(
+        relay_server::assistant::Assistant::new("sk-ant-not-real", "claude-haiku-5-5")
+            .unwrap()
+            .with_base_url(&stub.base),
+    ));
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let handle = tokio::spawn(async move {
+        let _ = axum::serve(listener, relay_server::router(state)).await;
+    });
+
+    TestServer {
+        base: format!("http://{addr}"),
+        client: reqwest::Client::new(),
+        handle,
+        mail,
+        store,
+    }
+}
+
+fn a_turn() -> Value {
+    json!({
+        "system": "You are the assistant inside Relay.",
+        "messages": [{ "role": "user", "content": "which requests touch billing?" }],
+        "tools": [
+            { "name": "list_requests", "input_schema": {} },
+            { "name": "send_request", "input_schema": {} }
+        ],
+    })
+}
+
+#[tokio::test]
+async fn a_subscriber_gets_an_answer_and_is_charged_a_turn() {
+    let stub = StubModel::start().await;
+    let server = start_with_model(&stub).await;
+    let token = owner_with_workspace(&server).await;
+    subscribe(&server, "w1", "price_with_ai").await;
+
+    let response = server
+        .post_auth("/v1/assistant/messages", &token, a_turn())
+        .await;
+    assert_eq!(response.status(), 200);
+
+    let body: Value = response.json().await.unwrap();
+    assert_eq!(body["content"][0]["text"], "Four of them do.");
+    assert_eq!(body["usage"]["inputTokens"], 1200);
+    assert_eq!(body["usage"]["cachedTokens"], 5000);
+
+    // And it came off the allowance.
+    let usage: Value = server
+        .get_auth("/v1/assistant/usage", &token)
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(usage["used"], 1);
+}
+
+#[tokio::test]
+async fn the_caller_cannot_choose_the_model_or_the_output_size() {
+    // Somebody on £6 a month naming Opus with a 128k ceiling would be
+    // spending Relay's money, so the proxy rebuilds the request.
+    let stub = StubModel::start().await;
+    let server = start_with_model(&stub).await;
+    let token = owner_with_workspace(&server).await;
+    subscribe(&server, "w1", "price_with_ai").await;
+
+    let mut greedy = a_turn();
+    greedy["model"] = json!("claude-opus-5-5");
+    greedy["max_tokens"] = json!(128_000);
+    server
+        .post_auth("/v1/assistant/messages", &token, greedy)
+        .await;
+
+    let sent = stub.last();
+    assert_eq!(sent["model"], "claude-haiku-5-5");
+    assert_eq!(sent["max_tokens"], 4096);
+}
+
+#[tokio::test]
+async fn the_fixed_prefix_is_sent_for_caching() {
+    let stub = StubModel::start().await;
+    let server = start_with_model(&stub).await;
+    let token = owner_with_workspace(&server).await;
+    subscribe(&server, "w1", "price_with_ai").await;
+
+    server
+        .post_auth("/v1/assistant/messages", &token, a_turn())
+        .await;
+
+    let sent = stub.last();
+    assert_eq!(sent["system"][0]["cache_control"]["type"], "ephemeral");
+    let tools = sent["tools"].as_array().unwrap();
+    assert_eq!(tools.last().unwrap()["cache_control"]["type"], "ephemeral");
+}
+
+#[tokio::test]
+async fn the_allowance_stops_the_model_being_called_at_all() {
+    // The point of the cap: the refusal must come before the money
+    // is spent, not after.
+    let stub = StubModel::start().await;
+    let server = start_with_model(&stub).await;
+    let token = owner_with_workspace(&server).await;
+    subscribe(&server, "w1", "price_with_ai").await;
+
+    for _ in 0..2 {
+        assert_eq!(
+            server
+                .post_auth("/v1/assistant/messages", &token, a_turn())
+                .await
+                .status(),
+            200
+        );
+    }
+    assert_eq!(stub.count(), 2);
+
+    let refused = server
+        .post_auth("/v1/assistant/messages", &token, a_turn())
+        .await;
+    assert_eq!(refused.status(), 402);
+    assert_eq!(stub.count(), 2, "the model was called after the cap");
+
+    let body: Value = refused.json().await.unwrap();
+    let message = body["message"].as_str().unwrap();
+    assert!(message.contains("own API key"), "{message}");
+}
+
+#[tokio::test]
+async fn the_cheaper_plan_cannot_use_relays_key() {
+    let stub = StubModel::start().await;
+    let server = start_with_model(&stub).await;
+    let token = owner_with_workspace(&server).await;
+    subscribe(&server, "w1", "price_sync").await;
+
+    let refused = server
+        .post_auth("/v1/assistant/messages", &token, a_turn())
+        .await;
+
+    assert_eq!(refused.status(), 402);
+    assert_eq!(stub.count(), 0);
+}
+
+#[tokio::test]
+async fn a_server_hosting_no_assistant_refuses_the_route() {
+    let server = start(SignupMode::Open).await;
+    let token = owner_with_workspace(&server).await;
+
+    let response = server
+        .post_auth("/v1/assistant/messages", &token, a_turn())
+        .await;
+    assert_eq!(response.status(), 400);
+}
+
+#[tokio::test]
+async fn the_assistant_route_needs_a_session() {
+    let stub = StubModel::start().await;
+    let server = start_with_model(&stub).await;
+
+    let response = server.post("/v1/assistant/messages", a_turn()).await;
+    assert_eq!(response.status(), 401);
+    assert_eq!(stub.count(), 0);
+}
+
 // --- signing up from a browser ----------------------------------------------
 
 /// Posts the signup form the way a browser would.
