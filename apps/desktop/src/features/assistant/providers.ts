@@ -9,6 +9,13 @@ import type { AssistantSettings } from '@/services/ipc'
  */
 export const PROVIDERS = [
   {
+    id: 'relay' as const,
+    label: 'Relay',
+    placeholder: '',
+    help: 'Included in a Relay subscription. Your sync server runs the model on '
+      + 'its key, so there is nothing to paste here.',
+  },
+  {
     id: 'anthropic' as const,
     label: 'Claude',
     placeholder: 'claude-opus-5-5',
@@ -30,6 +37,13 @@ export const PROVIDERS = [
 ]
 
 /** What to call a provider in a sentence. */
+/** Whether a provider wants an API key from the person. */
+export function needsKey (id: AssistantSettings['provider']): boolean {
+  // Relay is the exception: the sync session is the credential, and
+  // the provider key never reaches this machine.
+  return id !== 'relay'
+}
+
 export function providerLabel (id: AssistantSettings['provider']): string {
   return PROVIDERS.find((p) => p.id === id)?.label ?? id
 }

@@ -1766,7 +1766,7 @@ impl RelayService {
     }
 
     /// Builds the configured provider.
-    fn assistant_provider(
+    async fn assistant_provider(
         &self,
         settings: &AssistantSettings,
     ) -> RelayResult<Arc<dyn relay_agent::provider::ModelProvider>> {
@@ -1776,6 +1776,28 @@ impl RelayService {
         };
 
         match settings.provider.as_str() {
+            // Relay's own server, on the subscription. No key here:
+            // the sync session is the credential, and the provider
+            // key never reaches this process.
+            "relay" => {
+                let workspace = self.active_workspace().await?;
+                let (client, token) = self.sync_session(&workspace.id).await.map_err(|_| {
+                    RelayError::new(
+                        ErrorKind::Invalid,
+                        "connect this workspace to a Relay server first",
+                    )
+                    .with_detail(
+                        "Sync → connect, then sign in. The assistant then runs on your \
+                         subscription."
+                            .to_string(),
+                    )
+                })?;
+
+                Ok(Arc::new(
+                    relay_agent::provider::RelayProvider::new(client.base_url(), token)
+                        .map_err(|e| RelayError::new(ErrorKind::Invalid, e.to_string()))?,
+                ))
+            }
             "openai" => {
                 let key = self
                     .assistant_key("openai")
@@ -1862,7 +1884,7 @@ impl RelayService {
         approvals: Arc<crate::assistant::Approvals>,
         events: Arc<dyn crate::assistant::EventSink>,
     ) -> RelayResult<String> {
-        let provider = self.assistant_provider(&settings)?;
+        let provider = self.assistant_provider(&settings).await?;
 
         // A new conversation is titled from the question, trimmed, so
         // the list reads as a list of topics.

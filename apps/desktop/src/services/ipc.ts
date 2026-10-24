@@ -108,7 +108,7 @@ export type McpServer =
 
 /** Which model the assistant uses, and where. */
 export interface AssistantSettings {
-  provider: 'anthropic' | 'openai' | 'compatible'
+  provider: 'relay' | 'anthropic' | 'openai' | 'compatible'
   model: string
   baseUrl: string
 }

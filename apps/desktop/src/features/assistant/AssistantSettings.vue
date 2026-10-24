@@ -3,7 +3,7 @@ import { computed, ref, watch } from 'vue'
 import { Check, Eye, EyeOff, Loader2, Sparkles, X } from '@lucide/vue'
 import type { AssistantSettings } from '@/services/ipc'
 import { api } from '@/services/ipc'
-import { PROVIDERS } from './providers'
+import { PROVIDERS, needsKey } from './providers'
 import McpServers from './McpServers.vue'
 
 const props = defineProps<{ open: boolean, modelValue: AssistantSettings }>()
@@ -146,7 +146,20 @@ async function forget () {
             <p class="mt-1.5 text-xs text-muted">Leave blank for the default.</p>
           </div>
 
-          <div>
+          <!-- Relay's own server holds the key, so there is nothing
+               to paste and a blank field would only confuse. -->
+          <div v-if="!needsKey(modelValue.provider)" class="rounded-md border border-subtle p-3">
+            <p class="text-xs text-secondary">
+              The assistant runs on your subscription. Nothing to set up here.
+            </p>
+            <p class="mt-1 text-xs text-muted">
+              Requests go to the server this workspace syncs with, which runs the model
+              on its own key. If you run out of included requests, add your own key under
+              any other provider — that works without limit.
+            </p>
+          </div>
+
+          <div v-else>
             <label for="assistant-key" class="mb-1 block text-xs font-medium text-secondary">
               API key
               <span v-if="isLocal" class="font-normal text-muted">(usually not needed)</span>

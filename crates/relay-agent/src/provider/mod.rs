@@ -12,9 +12,11 @@ use crate::tool::{Tool, ToolCall};
 
 mod anthropic;
 mod openai;
+mod relay;
 
 pub use anthropic::AnthropicProvider;
 pub use openai::OpenAiProvider;
+pub use relay::RelayProvider;
 
 /// Who is speaking.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

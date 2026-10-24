@@ -63,46 +63,6 @@ impl AnthropicProvider {
             base_url: base_url.into().trim_end_matches('/').to_string(),
         })
     }
-
-    /// Turns the conversation into the Messages API's shape.
-    fn encode_messages(messages: &[Message]) -> Vec<Value> {
-        messages
-            .iter()
-            .map(|message| {
-                let mut content: Vec<Value> = Vec::new();
-
-                if !message.text.trim().is_empty() {
-                    content.push(json!({ "type": "text", "text": message.text }));
-                }
-
-                for call in &message.tool_calls {
-                    content.push(json!({
-                        "type": "tool_use",
-                        "id": call.id,
-                        "name": call.name,
-                        "input": call.input,
-                    }));
-                }
-
-                for result in &message.tool_results {
-                    content.push(json!({
-                        "type": "tool_result",
-                        "tool_use_id": result.call_id,
-                        "content": result.outcome.content,
-                        "is_error": result.outcome.is_error,
-                    }));
-                }
-
-                json!({
-                    "role": match message.role {
-                        Role::User => "user",
-                        Role::Assistant => "assistant",
-                    },
-                    "content": content,
-                })
-            })
-            .collect()
-    }
 }
 
 #[async_trait]
@@ -143,7 +103,7 @@ impl ModelProvider for AnthropicProvider {
                 "text": request.system,
                 "cache_control": { "type": "ephemeral" },
             }],
-            "messages": Self::encode_messages(request.messages),
+            "messages": encode_messages(request.messages),
             // Deciding which of a dozen tools to use, against a person's
             // own data, is exactly the kind of thing thinking helps with.
             "thinking": { "type": "adaptive" },
@@ -229,6 +189,50 @@ impl ModelProvider for AnthropicProvider {
     }
 }
 
+/// Turns a conversation into the Messages API's shape.
+///
+/// Shared with the Relay provider, which sends the same shape to a
+/// sync server rather than to Anthropic. One copy, so the two cannot
+/// drift.
+pub(super) fn encode_messages(messages: &[Message]) -> Vec<Value> {
+    messages
+        .iter()
+        .map(|message| {
+            let mut content: Vec<Value> = Vec::new();
+
+            if !message.text.trim().is_empty() {
+                content.push(json!({ "type": "text", "text": message.text }));
+            }
+
+            for call in &message.tool_calls {
+                content.push(json!({
+                    "type": "tool_use",
+                    "id": call.id,
+                    "name": call.name,
+                    "input": call.input,
+                }));
+            }
+
+            for result in &message.tool_results {
+                content.push(json!({
+                    "type": "tool_result",
+                    "tool_use_id": result.call_id,
+                    "content": result.outcome.content,
+                    "is_error": result.outcome.is_error,
+                }));
+            }
+
+            json!({
+                "role": match message.role {
+                    Role::User => "user",
+                    Role::Assistant => "assistant",
+                },
+                "content": content,
+            })
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -270,7 +274,7 @@ mod tests {
             }]),
         ];
 
-        let encoded = AnthropicProvider::encode_messages(&messages);
+        let encoded = encode_messages(&messages);
 
         assert_eq!(encoded[1]["content"][0]["type"], "text");
         assert_eq!(encoded[1]["content"][1]["type"], "tool_use");
@@ -292,7 +296,7 @@ mod tests {
             outcome: ToolOutcome::ok("done"),
         }])];
 
-        let encoded = AnthropicProvider::encode_messages(&messages);
+        let encoded = encode_messages(&messages);
         assert_eq!(encoded[0]["content"].as_array().unwrap().len(), 1);
         assert_eq!(encoded[0]["content"][0]["type"], "tool_result");
     }
@@ -305,7 +309,7 @@ mod tests {
             outcome: ToolOutcome::failed("no such request"),
         }])];
 
-        let encoded = AnthropicProvider::encode_messages(&messages);
+        let encoded = encode_messages(&messages);
         assert_eq!(encoded[0]["content"][0]["is_error"], true);
     }
 }
