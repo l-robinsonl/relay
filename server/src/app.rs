@@ -235,6 +235,13 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/billing/webhook", post(routes::billing_webhook))
         // Where Stripe returns the browser. Named in every checkout
         // session, so they have to exist.
+        // Registration from a browser, for anyone who has not installed
+        // Relay yet. The page says so itself when this server is
+        // invite-only or closed.
+        .route(
+            "/signup",
+            get(crate::pages::signup_form).post(crate::pages::signup_submit),
+        )
         .route("/billing/done", get(crate::pages::billing_done))
         .route("/billing/cancelled", get(crate::pages::billing_cancelled))
         .route("/v1/invitations/{token}", get(routes::invitation_offer))

@@ -1670,6 +1670,148 @@ async fn a_non_member_cannot_list_who_has_been_invited() {
     assert_eq!(response.status(), 404);
 }
 
+// --- signing up from a browser ----------------------------------------------
+
+/// Posts the signup form the way a browser would.
+async fn post_form(server: &TestServer, path: &str, fields: &[(&str, &str)]) -> reqwest::Response {
+    server
+        .client
+        .post(server.url(path))
+        .form(fields)
+        .send()
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn the_signup_page_offers_a_form_when_the_server_is_open() {
+    let server = start(SignupMode::Open).await;
+    let body = server.get("/signup").await.text().await.unwrap();
+
+    assert!(body.contains("<form"), "no form on an open server");
+    assert!(body.contains("name=\"password\""));
+}
+
+#[tokio::test]
+async fn the_signup_page_says_so_rather_than_teasing_a_form() {
+    // Someone arriving from a link should be told why they cannot
+    // register, not handed a form that refuses them afterwards.
+    for (mode, expected) in [
+        (SignupMode::Invite, "invitation"),
+        (SignupMode::Off, "not taking new accounts"),
+    ] {
+        let server = start(mode).await;
+        let body = server.get("/signup").await.text().await.unwrap();
+
+        assert!(!body.contains("<form"), "offered a form under {mode:?}");
+        assert!(body.contains(expected), "under {mode:?} it said: {body}");
+    }
+}
+
+#[tokio::test]
+async fn signing_up_in_a_browser_creates_a_usable_account() {
+    // The whole point: somebody who has not installed anything yet can
+    // get an account and then sign in from the application.
+    let server = start(SignupMode::Open).await;
+
+    let response = post_form(
+        &server,
+        "/signup",
+        &[
+            ("email", "grace@example.com"),
+            ("name", "Grace"),
+            ("password", "correct horse battery"),
+            ("confirm", "correct horse battery"),
+        ],
+    )
+    .await;
+    assert_eq!(response.status(), 200);
+
+    let body = response.text().await.unwrap();
+    assert!(body.contains("Account created"), "{body}");
+    // And it tells them where to point the application.
+    assert!(
+        body.contains("https://relay.test"),
+        "no address given: {body}"
+    );
+
+    let login = server
+        .post(
+            "/v1/auth/login",
+            json!({ "email": "grace@example.com", "password": "correct horse battery" }),
+        )
+        .await;
+    assert_eq!(login.status(), 200, "the account cannot sign in");
+}
+
+#[tokio::test]
+async fn the_signup_form_comes_back_with_what_was_wrong() {
+    let server = start(SignupMode::Open).await;
+
+    let mismatch = post_form(
+        &server,
+        "/signup",
+        &[
+            ("email", "grace@example.com"),
+            ("password", "correct horse battery"),
+            ("confirm", "something else entirely"),
+        ],
+    )
+    .await
+    .text()
+    .await
+    .unwrap();
+    assert!(mismatch.contains("did not match"), "{mismatch}");
+    // And keeps the address, so it does not have to be typed again.
+    assert!(mismatch.contains("grace@example.com"));
+
+    server.sign_up("ada@example.com").await;
+    let taken = post_form(
+        &server,
+        "/signup",
+        &[
+            ("email", "ada@example.com"),
+            ("password", "correct horse battery"),
+            ("confirm", "correct horse battery"),
+        ],
+    )
+    .await
+    .text()
+    .await
+    .unwrap();
+    assert!(taken.contains("<form"), "no way to try again: {taken}");
+}
+
+#[tokio::test]
+async fn a_browser_signup_is_refused_on_an_invite_only_server() {
+    // The page hides the form, but the route must refuse a posted one
+    // too — the form is trivially reconstructed.
+    let server = start(SignupMode::Invite).await;
+
+    let body = post_form(
+        &server,
+        "/signup",
+        &[
+            ("email", "mallory@example.com"),
+            ("password", "correct horse battery"),
+            ("confirm", "correct horse battery"),
+        ],
+    )
+    .await
+    .text()
+    .await
+    .unwrap();
+    assert!(body.contains("not taking new accounts"), "{body}");
+
+    let login = server
+        .post(
+            "/v1/auth/login",
+            json!({ "email": "mallory@example.com", "password": "correct horse battery" }),
+        )
+        .await;
+    assert_eq!(login.status(), 401, "an account was created anyway");
+}
+
 // --- billing ---------------------------------------------------------------
 
 /// A stand-in for Stripe, so the checkout and portal routes can be

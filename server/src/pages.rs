@@ -175,6 +175,135 @@ fn form_body(token: &str, problem: Option<&str>) -> String {
     )
 }
 
+/// A submitted signup.
+#[derive(Debug, serde::Deserialize)]
+pub struct SignupForm {
+    /// The address to register.
+    #[serde(default)]
+    pub email: String,
+    /// What to call them. Optional; the address is used otherwise.
+    #[serde(default)]
+    pub name: String,
+    /// The chosen password.
+    #[serde(default)]
+    pub password: String,
+    /// The same password again.
+    #[serde(default)]
+    pub confirm: String,
+}
+
+/// `GET /signup`
+///
+/// Registration from a browser, for people who have not installed
+/// anything yet. The desktop application can register on its own, but
+/// that is no use to someone reading about Relay on a web page and
+/// wanting an account before they commit to a download.
+pub async fn signup_form(State(state): State<AppState>) -> Html<String> {
+    Html(match state.config.signup_mode {
+        crate::config::SignupMode::Open => page(
+            "Create an account",
+            "This gives you somewhere to keep your workspace so it follows you \
+             between machines. Relay itself works without one.",
+            Some(&signup_body(None, "", "")),
+        ),
+        crate::config::SignupMode::Invite => page(
+            "This server is invitation only",
+            "Ask whoever runs it to send you an invitation. The link in it \
+             will let you set a password and join.",
+            None,
+        ),
+        crate::config::SignupMode::Off => page(
+            "This server is not taking new accounts",
+            "Registration is closed here. Relay works perfectly well without \
+             an account, and you can always run a server of your own.",
+            None,
+        ),
+    })
+}
+
+/// `POST /signup`
+pub async fn signup_submit(
+    State(state): State<AppState>,
+    Form(form): Form<SignupForm>,
+) -> Html<String> {
+    let again = |problem: &str| {
+        Html(page(
+            "Create an account",
+            "",
+            Some(&signup_body(Some(problem), &form.email, &form.name)),
+        ))
+    };
+
+    if form.password != form.confirm {
+        return again("Those two passwords did not match.");
+    }
+
+    let display_name = if form.name.trim().is_empty() {
+        form.email.split('@').next().unwrap_or("User").to_string()
+    } else {
+        form.name.clone()
+    };
+
+    match crate::app::register_user(&state, &form.email, &form.password, &display_name, None).await
+    {
+        Ok(_) => Html(page(
+            "Account created",
+            "",
+            Some(&format!(
+                "<p>Now install Relay, open <b>Sync</b>, and give it this address:</p>\
+                 <p class=\"address\">{}</p>\
+                 <p class=\"muted\">Sign in there with the address and password you \
+                  just chose. Everything you make stays on your own machine; the \
+                  server holds a copy so it reaches your other ones.</p>\
+                 <p class=\"muted\">If this server asks you to confirm your address \
+                  first, the message is on its way.</p>",
+                escape(state.config.public_url.trim_end_matches('/'))
+            )),
+        )),
+        // Its own wording is the useful one — "that address is already
+        // registered", "password is too short" — and none of it
+        // describes the deployment.
+        Err(crate::error::ServerError::Conflict(message))
+        | Err(crate::error::ServerError::BadRequest(message)) => again(&message),
+        Err(crate::error::ServerError::Forbidden) => Html(page(
+            "This server is not taking new accounts",
+            "Registration was closed while you were filling that in.",
+            None,
+        )),
+        Err(_) => again("Something went wrong creating the account. Try again."),
+    }
+}
+
+/// The signup form, with an optional complaint above it.
+fn signup_body(problem: Option<&str>, email: &str, name: &str) -> String {
+    let notice = problem
+        .map(|p| format!("<p class=\"problem\">{}</p>", escape(p)))
+        .unwrap_or_default();
+
+    format!(
+        "{notice}\
+         <form method=\"post\" action=\"/signup\">\
+           <label for=\"email\">E-mail address</label>\
+           <input id=\"email\" name=\"email\" type=\"email\" value=\"{}\" \
+                  autocomplete=\"email\" required autofocus>\
+           <label for=\"name\">Your name <span class=\"opt\">(optional)</span></label>\
+           <input id=\"name\" name=\"name\" type=\"text\" value=\"{}\" \
+                  autocomplete=\"name\">\
+           <label for=\"password\">Password</label>\
+           <input id=\"password\" name=\"password\" type=\"password\" \
+                  autocomplete=\"new-password\" required minlength=\"12\">\
+           <label for=\"confirm\">Again, to be sure</label>\
+           <input id=\"confirm\" name=\"confirm\" type=\"password\" \
+                  autocomplete=\"new-password\" required minlength=\"12\">\
+           <button type=\"submit\">Create the account</button>\
+         </form>\
+         <p class=\"muted\">Twelve characters or more. A phrase you can remember \
+          beats a short tangle you cannot.</p>",
+        escape(email),
+        escape(name)
+    )
+}
+
 /// `GET /billing/done`
 ///
 /// Where Stripe sends the browser after a successful checkout. It
@@ -243,6 +372,11 @@ fn page(heading: &str, detail: &str, body: Option<&str>) -> String {
          font-size:.925rem;font-weight:600;cursor:pointer}}\
          .mark{{font-weight:700;letter-spacing:-.02em;color:var(--muted);\
          font-size:.8rem;margin-bottom:1.25rem}}\
+         .opt{{font-weight:400;color:var(--muted)}}\
+         .muted{{font-size:.825rem}}\
+         .address{{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;\
+         font-size:.9rem;background:var(--line);color:var(--fg);padding:.6rem .7rem;\
+         border-radius:.375rem;word-break:break-all;margin:.5rem 0 1rem}}\
          </style></head><body><main>\
          <div class=\"mark\">RELAY</div><h1>{}</h1>{detail}{}</main></body></html>",
         escape(heading),
