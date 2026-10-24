@@ -16,8 +16,12 @@
 #
 #   ./scripts/shoot-ui.sh assistant/AssistantSettings 560 760
 #
-# Needs `npm run build` to have produced dist/assets/*.css at least
-# once, and google-chrome on PATH.
+# Run `npm run build` first, every time a component uses a Tailwind
+# class no other component uses. The stylesheet is generated from the
+# classes Tailwind has seen, so a brand-new `ml-1.5` is simply absent
+# from a stale build and the photograph shows text with no gap in it —
+# a layout bug that exists only in the picture. Also needs
+# google-chrome on PATH.
 #
 # What it cannot see, and this has now produced three false alarms.
 # The picture is serialised HTML, so anything living in a DOM

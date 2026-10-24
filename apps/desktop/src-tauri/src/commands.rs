@@ -737,6 +737,16 @@ pub async fn sync_members(
     service.sync_members(workspace_id).await
 }
 
+/// Asks a GraphQL endpoint what it accepts.
+#[tauri::command]
+pub async fn graphql_schema(
+    service: State<'_, RelayService>,
+    doc: relay_models::RequestDoc,
+    environment: Option<relay_models::EnvironmentId>,
+) -> RelayResult<relay_core::graphql::Schema> {
+    service.graphql_schema(doc, environment).await
+}
+
 // --- billing ---------------------------------------------------------------
 
 /// What the workspace is entitled to, and whether it is paid for.

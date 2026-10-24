@@ -164,6 +164,8 @@ watch(
         v-else-if="tab.activeSection === 'body'"
         class="h-full"
         :model-value="tab.doc.body"
+        :doc="tab.doc"
+        :environment="workspace.activeEnvironmentId"
         @update:model-value="tabs.update(tab.id, { body: $event })"
       />
 

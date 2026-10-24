@@ -117,6 +117,7 @@ pub fn run() {
             commands::sync_register,
             commands::sync_invitation_offer,
             commands::sync_join_invited,
+            commands::graphql_schema,
             commands::sync_members,
             commands::sync_billing,
             commands::sync_billing_checkout,

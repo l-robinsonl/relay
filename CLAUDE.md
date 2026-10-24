@@ -399,6 +399,11 @@ Two things it cannot see, both already paid for:
   mid-animation. **Three of the four alarms this camera has raised
   were itself.** Assert on the real value in a test before changing
   anything.
+- **Rebuild the stylesheet before photographing a new component.**
+  Tailwind generates only the classes it has seen, so a utility used
+  nowhere else is missing from a stale `dist/assets/*.css` and the
+  shot shows the bug its absence causes — two words with no gap
+  between them. `npm run build` first.
 - **Every dialog here teleports to `body`**, so `wrapper.html()`
   catches an empty shell. `src/features/shots.ts` has `rendered()`,
   which picks up teleported content; mount with

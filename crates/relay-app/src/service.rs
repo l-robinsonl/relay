@@ -473,6 +473,76 @@ impl RelayService {
             .map(|(exchange, _)| exchange)
     }
 
+    /// Asks a GraphQL endpoint what it accepts.
+    ///
+    /// Sent as the request it belongs to — same URL, same headers,
+    /// same authentication, same TLS settings — with the body swapped
+    /// for the introspection query. A schema browser that could not
+    /// reach a private API would be a schema browser for public
+    /// demos, and every interesting API is behind a key.
+    pub async fn graphql_schema(
+        &self,
+        doc: RequestDoc,
+        environment: Option<EnvironmentId>,
+    ) -> RelayResult<relay_core::graphql::Schema> {
+        let mut probe = doc;
+        probe.body = relay_models::RequestBody::GraphQl {
+            query: relay_core::graphql::INTROSPECTION_QUERY.to_string(),
+            variables: String::new(),
+        };
+        // Introspection is a POST whatever the request normally is.
+        probe.method = relay_models::HttpMethod::Post;
+        // Scripts belong to the request the person wrote, not to a
+        // schema lookup: a pre-request script that rewrites the body
+        // would overwrite the introspection query, and a test script
+        // would run against a response nobody asked for.
+        probe.scripts = Default::default();
+
+        let exchange = self
+            .request_send(
+                relay_models::ExecutionId::new(),
+                probe,
+                environment,
+                Arc::new(relay_http::NoopProgress),
+            )
+            .await?;
+
+        let body = match &exchange {
+            HttpExchange::Success { response, .. } => match &response.body {
+                relay_models::ResponseBody::Text { text } => text.clone(),
+                // A schema arriving as a file means it was enormous,
+                // and as binary means it is not a schema at all.
+                _ => {
+                    return Err(RelayError::new(
+                        ErrorKind::Invalid,
+                        "the endpoint did not answer with text",
+                    ));
+                }
+            },
+            HttpExchange::Failure { error, .. } => {
+                return Err(RelayError::new(ErrorKind::Transport, error.message.clone()));
+            }
+            HttpExchange::Cancelled { .. } => {
+                return Err(RelayError::new(
+                    ErrorKind::Transport,
+                    "the schema lookup was cancelled",
+                ));
+            }
+        };
+
+        let json: serde_json::Value = serde_json::from_str(&body).map_err(|_| {
+            RelayError::new(ErrorKind::Invalid, "the endpoint did not answer with JSON")
+                .with_detail(
+                    "Check the URL points at the GraphQL endpoint itself rather than a \
+                 page describing it."
+                        .to_string(),
+                )
+        })?;
+
+        relay_core::graphql::Schema::parse(&json)
+            .map_err(|message| RelayError::new(ErrorKind::Invalid, message))
+    }
+
     /// The send itself, keeping what the pre-request script reported.
     async fn send(
         &self,

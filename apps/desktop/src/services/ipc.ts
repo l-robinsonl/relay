@@ -14,6 +14,7 @@ import type {
   MemberView,
   RelayError,
   RequestDoc,
+  Schema,
   Role,
   UserProfile,
   TreeNode,
@@ -332,6 +333,10 @@ export const api = {
   /** Progress while a turn runs. Returns an unsubscribe function. */
   onAssistantEvent: (handler: (event: AssistantEvent) => void): Promise<UnlistenFn> =>
     listen<AssistantEvent>('relay://assistant', (e) => handler(e.payload)),
+
+  /** Asks a GraphQL endpoint what it accepts. */
+  graphqlSchema: (doc: RequestDoc, environment: string | null) =>
+    call<Schema>('graphql_schema', { doc, environment }),
 
   // --- billing -------------------------------------------------------------
   syncBilling: (workspaceId: string) =>

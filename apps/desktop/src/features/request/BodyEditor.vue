@@ -1,13 +1,20 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { FileUp, Wand2 } from '@lucide/vue'
-import type { FormField, KeyValue, RequestBody } from '@relay/shared-types'
+import type { FormField, KeyValue, RequestBody, RequestDoc } from '@relay/shared-types'
 import CodeEditor from '@/components/ui/CodeEditor.vue'
+import GraphQlSchema from '@/features/request/GraphQlSchema.vue'
 import KeyValueEditor from '@/components/ui/KeyValueEditor.vue'
 import MultipartEditor from '@/components/ui/MultipartEditor.vue'
 import { tryFormatJson } from '@/composables/useFormat'
 
-const props = defineProps<{ modelValue: RequestBody }>()
+const props = defineProps<{
+  modelValue: RequestBody
+  /** The request this body belongs to. Needed only to read a GraphQL
+   *  schema, which goes out as that request so a private API works. */
+  doc?: RequestDoc
+  environment?: string | null
+}>()
 const emit = defineEmits<{ 'update:modelValue': [RequestBody] }>()
 
 const MODES = [
@@ -191,7 +198,9 @@ async function pickFile () {
         </p>
       </div>
 
-      <div v-else-if="mode === 'graphql'" class="flex h-full flex-col">
+      <div v-else-if="mode === 'graphql'" class="flex h-full min-w-0 gap-px lg:flex-row"
+           :style="{ backgroundColor: 'var(--border-subtle)' }">
+      <div class="flex h-full min-w-0 flex-1 flex-col" :style="{ backgroundColor: 'var(--surface-base)' }">
         <CodeEditor
           :model-value="graphQlQuery"
           language="graphql"
@@ -222,6 +231,18 @@ async function pickFile () {
               })
             "
           />
+        </div>
+      </div>
+
+        <!-- What the endpoint accepts. Only where there is a request
+             to ask it with: the lookup is a real call to somebody's
+             server, carrying that request's authentication. -->
+        <div
+          v-if="doc"
+          class="hidden h-full w-80 shrink-0 lg:block"
+          :style="{ backgroundColor: 'var(--surface-base)' }"
+        >
+          <GraphQlSchema :doc="doc" :environment="environment ?? null" />
         </div>
       </div>
     </div>

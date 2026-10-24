@@ -12,6 +12,7 @@
 
 pub mod curl;
 mod error;
+pub mod graphql;
 pub mod import;
 pub mod interpolate;
 pub mod openapi;
