@@ -2039,6 +2039,7 @@ async fn running_out_of_seats_asks_for_payment_not_a_smaller_request() {
             status: relay_server::billing::SubscriptionStatus::Active,
             seats: 1,
             current_period_end: None,
+            price_id: None,
         })
         .await
         .unwrap();

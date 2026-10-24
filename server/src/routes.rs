@@ -770,6 +770,12 @@ pub async fn billing_webhook(
             current_period_end: event
                 .current_period_end
                 .or_else(|| existing.as_ref().and_then(|s| s.current_period_end)),
+            // A checkout event carries no line items either, so the
+            // price arrives with the subscription event that follows.
+            price_id: event
+                .price_id
+                .clone()
+                .or_else(|| existing.as_ref().and_then(|s| s.price_id.clone())),
         })
         .await?;
 

@@ -27,6 +27,11 @@ pub struct Entitlement {
     /// What to tell the person, when there is something to say.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notice: Option<String>,
+    /// Assistant turns included per period. `None` means the
+    /// assistant is not included and the person uses their own key —
+    /// which everybody can, free and unmetered, paying or not.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assistant_turns: Option<u32>,
 }
 
 impl Entitlement {
@@ -36,6 +41,9 @@ impl Entitlement {
             seats: None,
             active: true,
             notice: None,
+            // Self-hosting charges for nothing, and nobody runs a
+            // model on Relay's key.
+            assistant_turns: None,
         }
     }
 
@@ -110,6 +118,42 @@ impl SubscriptionStatus {
     }
 }
 
+/// What a subscription includes.
+///
+/// Read from the Stripe price the subscription is actually on, rather
+/// than stored as a name of its own, so the two cannot disagree. A
+/// deployment that has not configured an assistant price has only one
+/// plan, which is the self-hosting case and most of the others.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Plan {
+    /// Sync. The assistant still works — with the person's own key,
+    /// as it does for everybody, paying or not.
+    Sync,
+    /// Sync, and an allowance of assistant usage on Relay's key.
+    SyncAndAssistant,
+}
+
+impl Plan {
+    /// Which plan a price id means.
+    ///
+    /// Anything that is not the configured assistant price is the sync
+    /// plan, including a price this build has never heard of. Failing
+    /// that way round matters: a mismatch must not hand out model
+    /// usage nobody is paying for.
+    pub fn for_price(price_id: Option<&str>, assistant_price: Option<&str>) -> Self {
+        match (price_id, assistant_price) {
+            (Some(price), Some(assistant)) if price == assistant => Self::SyncAndAssistant,
+            _ => Self::Sync,
+        }
+    }
+
+    /// Whether the assistant runs on Relay's key under this plan.
+    pub fn includes_assistant(self) -> bool {
+        matches!(self, Self::SyncAndAssistant)
+    }
+}
+
 /// A workspace's subscription, as stored.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Subscription {
@@ -125,22 +169,89 @@ pub struct Subscription {
     pub seats: u32,
     /// When the paid period ends, in epoch milliseconds.
     pub current_period_end: Option<i64>,
+    /// The Stripe price this subscription is on, which is what says
+    /// whether the assistant is included. `None` on a subscription
+    /// recorded before prices were distinguished.
+    pub price_id: Option<String>,
 }
 
 impl Subscription {
-    /// What this subscription entitles.
+    /// What this subscription entitles, as far as the store can say.
+    ///
+    /// Seats only. Whether the assistant is included depends on which
+    /// price this is, and what that price means is a deployment's
+    /// configuration rather than a property of the row — so the
+    /// handler fills `assistant_turns` in, where the configuration is.
     pub fn entitlement(&self) -> Entitlement {
         Entitlement {
             seats: Some(self.seats),
             active: self.status.entitles(),
             notice: self.status.notice(),
+            assistant_turns: None,
         }
+    }
+
+    /// Which plan this is, given what the deployment charges for.
+    pub fn plan(&self, assistant_price: Option<&str>) -> Plan {
+        Plan::for_price(self.price_id.as_deref(), assistant_price)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_assistant_price_is_the_only_one_that_includes_it() {
+        let assistant = Some("price_with_ai");
+
+        assert_eq!(
+            Plan::for_price(Some("price_with_ai"), assistant),
+            Plan::SyncAndAssistant
+        );
+        assert_eq!(Plan::for_price(Some("price_sync"), assistant), Plan::Sync);
+    }
+
+    #[test]
+    fn anything_unrecognised_fails_closed() {
+        // A price this build has never seen, a subscription recorded
+        // before prices were distinguished, or a deployment that sells
+        // no assistant at all. None of them may hand out model usage
+        // nobody is paying for.
+        let assistant = Some("price_with_ai");
+
+        assert_eq!(Plan::for_price(None, assistant), Plan::Sync);
+        assert_eq!(
+            Plan::for_price(Some("price_unknown"), assistant),
+            Plan::Sync
+        );
+        // And a deployment that has configured no assistant price
+        // cannot be talked into one by any price id at all.
+        assert_eq!(Plan::for_price(Some("price_with_ai"), None), Plan::Sync);
+        assert!(!Plan::for_price(Some("price_with_ai"), None).includes_assistant());
+    }
+
+    #[test]
+    fn the_store_does_not_decide_whether_the_assistant_is_included() {
+        // What a price means is this deployment's configuration, not a
+        // property of the row, so the entitlement the store builds
+        // leaves it unset and the handler fills it in.
+        let subscription = Subscription {
+            workspace_id: "w1".into(),
+            customer_id: "cus_1".into(),
+            subscription_id: None,
+            status: SubscriptionStatus::Active,
+            seats: 3,
+            current_period_end: None,
+            price_id: Some("price_with_ai".into()),
+        };
+
+        assert_eq!(subscription.entitlement().assistant_turns, None);
+        assert_eq!(
+            subscription.plan(Some("price_with_ai")),
+            Plan::SyncAndAssistant
+        );
+    }
 
     #[test]
     fn self_hosting_is_never_limited() {
@@ -156,6 +267,7 @@ mod tests {
             seats: Some(3),
             active: true,
             notice: None,
+            assistant_turns: None,
         };
 
         assert!(three.allows(2));

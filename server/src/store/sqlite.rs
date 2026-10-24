@@ -92,6 +92,7 @@ impl SyncStore for SqliteStore {
             include_str!("../../migrations/sqlite/0001_initial.sql"),
             include_str!("../../migrations/sqlite/0002_email_tokens.sql"),
             include_str!("../../migrations/sqlite/0003_billing.sql"),
+            include_str!("../../migrations/sqlite/0004_assistant_plan.sql"),
         ] {
             sqlx::raw_sql(sql)
                 .execute(&self.pool)
@@ -515,14 +516,15 @@ impl SyncStore for SqliteStore {
         sqlx::query(
             "INSERT INTO subscriptions
                  (workspace_id, customer_id, subscription_id, status, seats,
-                  current_period_end, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                  current_period_end, price_id, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
              ON CONFLICT(workspace_id) DO UPDATE SET
                  customer_id = excluded.customer_id,
                  subscription_id = excluded.subscription_id,
                  status = excluded.status,
                  seats = excluded.seats,
                  current_period_end = excluded.current_period_end,
+                 price_id = excluded.price_id,
                  updated_at = excluded.updated_at",
         )
         .bind(&subscription.workspace_id)
@@ -531,6 +533,7 @@ impl SyncStore for SqliteStore {
         .bind(status_text(subscription.status))
         .bind(subscription.seats as i64)
         .bind(subscription.current_period_end)
+        .bind(&subscription.price_id)
         .bind(now_millis())
         .execute(&self.pool)
         .await?;
@@ -543,7 +546,7 @@ impl SyncStore for SqliteStore {
     ) -> ServerResult<Option<crate::billing::Subscription>> {
         let row = sqlx::query(
             "SELECT workspace_id, customer_id, subscription_id, status, seats,
-                    current_period_end
+                    current_period_end, price_id
              FROM subscriptions WHERE workspace_id = ?1",
         )
         .bind(workspace_id)
@@ -557,6 +560,7 @@ impl SyncStore for SqliteStore {
             status: crate::billing::SubscriptionStatus::parse(&r.get::<String, _>("status")),
             seats: r.get::<i64, _>("seats").max(0) as u32,
             current_period_end: r.get("current_period_end"),
+            price_id: r.get("price_id"),
         }))
     }
 

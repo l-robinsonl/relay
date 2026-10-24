@@ -183,6 +183,9 @@ pub struct EventOutcome {
     pub status: Option<super::SubscriptionStatus>,
     /// Seats, from the first line item's quantity.
     pub seats: Option<u32>,
+    /// The price the subscription is on, which is what says whether
+    /// the assistant is included.
+    pub price_id: Option<String>,
     /// When the paid period ends, in epoch milliseconds.
     pub current_period_end: Option<i64>,
 }
@@ -237,6 +240,9 @@ pub fn read_event(body: &str) -> ServerResult<EventOutcome> {
         seats: object["items"]["data"][0]["quantity"]
             .as_u64()
             .map(|q| q as u32),
+        price_id: object["items"]["data"][0]["price"]["id"]
+            .as_str()
+            .map(str::to_string),
         // Stripe counts in seconds; everything here counts in millis.
         current_period_end: object["current_period_end"]
             .as_i64()
@@ -299,6 +305,33 @@ mod tests {
         assert_eq!(outcome.seats, Some(7));
         // Stripe counts seconds; everything here counts milliseconds.
         assert_eq!(outcome.current_period_end, Some(1_700_000_000_000));
+    }
+
+    #[test]
+    fn a_subscription_event_carries_the_price_it_is_on() {
+        // Which plan a workspace is on is read from this, so losing
+        // it would quietly drop everyone to the cheaper tier.
+        let outcome = read_event(
+            r#"{"id":"evt_p","type":"customer.subscription.updated",
+                "data":{"object":{"id":"sub_1","customer":"cus_1","status":"active",
+                "metadata":{"workspace_id":"w1"},
+                "items":{"data":[{"quantity":4,"price":{"id":"price_with_ai"}}]}}}}"#,
+        )
+        .unwrap();
+
+        assert_eq!(outcome.price_id.as_deref(), Some("price_with_ai"));
+        assert_eq!(outcome.seats, Some(4));
+    }
+
+    #[test]
+    fn an_event_without_a_price_says_so_rather_than_inventing_one() {
+        let outcome = read_event(
+            r#"{"id":"evt_c","type":"checkout.session.completed",
+                "data":{"object":{"customer":"cus_1","client_reference_id":"w1"}}}"#,
+        )
+        .unwrap();
+
+        assert_eq!(outcome.price_id, None);
     }
 
     #[test]

@@ -1369,6 +1369,7 @@ fn subscription(workspace: &str, status: SubscriptionStatus, seats: u32) -> Subs
         status,
         seats,
         current_period_end: Some(in_an_hour()),
+        price_id: None,
     }
 }
 
@@ -1511,6 +1512,54 @@ async fn a_cancelled_subscription_stops_growth_only() {
         assert!(store.head(&owner, "w1").await.is_ok());
         assert!(store.list_workspaces(&owner).await.unwrap().len() == 1);
         assert!(store.export(&owner, "w1").await.is_ok());
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn the_price_a_workspace_pays_survives_a_round_trip() {
+    // Which plan a subscription is on is read from its price, so the
+    // price has to come back out of the database exactly as it went
+    // in — on both backends, or the same subscription would include
+    // the assistant self-hosted and not on Cloud.
+    for_each_backend(|store| async move {
+        let owner = seed_user(&store, "ada@example.com").await;
+        store.create_workspace(&owner, "w1", "Team").await.unwrap();
+
+        let mut paid = subscription("w1", SubscriptionStatus::Active, 3);
+        paid.price_id = Some("price_with_ai".into());
+        store.save_subscription(&paid).await.unwrap();
+
+        let read = store.subscription("w1").await.unwrap().unwrap();
+        assert_eq!(read.price_id.as_deref(), Some("price_with_ai"));
+        assert_eq!(
+            read.plan(Some("price_with_ai")),
+            relay_server::billing::Plan::SyncAndAssistant
+        );
+        assert_eq!(
+            read.plan(Some("price_other")),
+            relay_server::billing::Plan::Sync,
+            "an unrecognised price must not include the assistant"
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_subscription_predating_prices_reads_as_sync_only() {
+    // The column is new, so rows written before it exists come back
+    // with no price. They must not be read as including anything.
+    for_each_backend(|store| async move {
+        let owner = seed_user(&store, "ada@example.com").await;
+        store.create_workspace(&owner, "w1", "Team").await.unwrap();
+        store
+            .save_subscription(&subscription("w1", SubscriptionStatus::Active, 1))
+            .await
+            .unwrap();
+
+        let read = store.subscription("w1").await.unwrap().unwrap();
+        assert_eq!(read.price_id, None);
+        assert!(!read.plan(Some("price_with_ai")).includes_assistant());
     })
     .await;
 }
