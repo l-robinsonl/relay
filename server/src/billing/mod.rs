@@ -32,24 +32,6 @@ pub struct Entitlement {
     /// which everybody can, free and unmetered, paying or not.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assistant_turns: Option<u32>,
-    /// Whether this workspace may sync at all.
-    ///
-    /// False in exactly one case: a deployment that charges, and a
-    /// workspace nobody has ever paid for. A subscription that has
-    /// lapsed, failed or been cancelled keeps syncing — that
-    /// distinction is the whole point. Refusing to start storing
-    /// somebody's work until they pay is a price; refusing to hand
-    /// back work already stored because a card failed is a hostage,
-    /// and a tool that holds your API requests must not do the
-    /// second.
-    #[serde(default = "yes")]
-    pub syncs: bool,
-}
-
-/// `serde` default for [`Entitlement::syncs`]: anything that does not
-/// say otherwise syncs.
-fn yes() -> bool {
-    true
 }
 
 impl Entitlement {
@@ -62,27 +44,25 @@ impl Entitlement {
             // Self-hosting charges for nothing, and nobody runs a
             // model on Relay's key.
             assistant_turns: None,
-            syncs: true,
         }
     }
 
-    /// A workspace on a charging deployment that nobody has paid for.
+    /// One person, on a deployment that charges, with no
+    /// subscription.
     ///
-    /// Not the same as a lapsed subscription, which keeps syncing.
-    /// Nothing of theirs is on the server yet, so nothing is being
-    /// withheld — this is a price, asked before the work starts.
-    pub fn unsubscribed() -> Self {
+    /// Free, and not crippled: your own machines stay in step with
+    /// each other for nothing. The price starts where the value
+    /// does, which is the second person — nobody pays to share a
+    /// workspace with themselves, and asking them to is asking for
+    /// money before anything worth money has happened.
+    pub fn solo() -> Self {
         Self {
-            seats: Some(0),
-            active: false,
-            notice: Some(
-                "This workspace is not subscribed. Everything in it stays on this \
-                 machine and works exactly as it does now; subscribing is what puts \
-                 it on the server."
-                    .into(),
-            ),
+            // One seat: the workspace works, and `allows` refuses a
+            // second member because 1 < 1 is false.
+            seats: Some(1),
+            active: true,
+            notice: None,
             assistant_turns: None,
-            syncs: false,
         }
     }
 
@@ -345,9 +325,6 @@ impl Subscription {
             active: self.status.entitles(),
             notice: self.status.notice(),
             assistant_turns: None,
-            // Having paid once is enough. A failed card stops growth,
-            // never access to work already here.
-            syncs: true,
         }
     }
 
@@ -501,7 +478,6 @@ mod tests {
             active: true,
             notice: None,
             assistant_turns: None,
-            syncs: true,
         };
 
         assert!(three.allows(2));

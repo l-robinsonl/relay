@@ -1524,25 +1524,56 @@ async fn a_cancelled_subscription_stops_growth_only() {
 }
 
 #[tokio::test]
-async fn a_charging_server_does_not_sync_a_workspace_nobody_paid_for() {
+async fn one_person_syncs_free_even_where_there_is_a_charge() {
+    // Nobody pays to share a workspace with themselves. The price
+    // starts where the value does — the second person — and asking
+    // before that is asking for money before anything worth money
+    // has happened.
     let store = charging_sqlite_store().await;
     let owner = seed_user(&store, "ada@example.com").await;
     store.create_workspace(&owner, "w1", "Team").await.unwrap();
 
-    // Nothing of theirs is on the server yet, so nothing is being
-    // withheld. This is a price, asked before the work starts.
-    assert!(store.head(&owner, "w1").await.is_err());
-    assert!(store.changes_since(&owner, "w1", 0, 100).await.is_err());
-    assert!(store.export(&owner, "w1").await.is_err());
+    assert!(store.head(&owner, "w1").await.is_ok());
+    assert!(store.changes_since(&owner, "w1", 0, 100).await.is_ok());
+    assert!(store.export(&owner, "w1").await.is_ok());
 
     let entitlement = store.entitlement("w1").await.unwrap();
-    assert!(!entitlement.syncs);
+    assert!(entitlement.active);
+    assert_eq!(entitlement.seats, Some(1));
+}
+
+#[tokio::test]
+async fn the_second_person_is_what_costs_money() {
+    let store = charging_sqlite_store().await;
+    let owner = seed_user(&store, "ada@example.com").await;
+    let grace = seed_user(&store, "grace@example.com").await;
+    store.create_workspace(&owner, "w1", "Team").await.unwrap();
+
+    // Both ways in are refused, as they are for any full workspace.
     assert!(
-        entitlement
-            .notice
-            .unwrap()
-            .contains("stays on this machine")
+        store
+            .create_invitation(
+                &owner,
+                "w1",
+                "g@example.com",
+                Role::Editor,
+                "i1",
+                in_an_hour()
+            )
+            .await
+            .is_err(),
+        "an unpaid workspace invited somebody"
     );
+    assert!(
+        store
+            .upsert_membership(&owner, "w1", &grace.user_id, Role::Editor)
+            .await
+            .is_err(),
+        "an unpaid workspace admitted somebody"
+    );
+
+    // And the owner is not locked out of their own work by it.
+    assert!(store.head(&owner, "w1").await.is_ok());
 }
 
 #[tokio::test]
@@ -1569,7 +1600,6 @@ async fn paying_once_is_enough_to_keep_syncing() {
             "{status:?} stopped a paid workspace syncing"
         );
         assert!(store.export(&owner, "w1").await.is_ok(), "{status:?}");
-        assert!(store.entitlement("w1").await.unwrap().syncs, "{status:?}");
     }
 }
 
@@ -1585,7 +1615,6 @@ async fn self_hosting_never_meets_the_paywall() {
     assert!(store.export(&owner, "w1").await.is_ok());
 
     let entitlement = store.entitlement("w1").await.unwrap();
-    assert!(entitlement.syncs);
     assert_eq!(entitlement.seats, None);
 }
 
