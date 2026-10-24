@@ -298,9 +298,9 @@ impl Plan {
     /// plan, including a price this build has never heard of. Failing
     /// that way round matters: a mismatch must not hand out model
     /// usage nobody is paying for.
-    pub fn for_price(price_id: Option<&str>, assistant_price: Option<&str>) -> Self {
-        match (price_id, assistant_price) {
-            (Some(price), Some(assistant)) if price == assistant => Self::SyncAndAssistant,
+    pub fn for_price(price_id: Option<&str>, assistant_prices: &[&str]) -> Self {
+        match price_id {
+            Some(price) if assistant_prices.contains(&price) => Self::SyncAndAssistant,
             _ => Self::Sync,
         }
     }
@@ -352,8 +352,8 @@ impl Subscription {
     }
 
     /// Which plan this is, given what the deployment charges for.
-    pub fn plan(&self, assistant_price: Option<&str>) -> Plan {
-        Plan::for_price(self.price_id.as_deref(), assistant_price)
+    pub fn plan(&self, assistant_prices: &[&str]) -> Plan {
+        Plan::for_price(self.price_id.as_deref(), assistant_prices)
     }
 }
 
@@ -428,33 +428,40 @@ mod tests {
     }
 
     #[test]
-    fn the_assistant_price_is_the_only_one_that_includes_it() {
-        let assistant = Some("price_with_ai");
+    fn either_assistant_price_includes_it() {
+        // Monthly and annual are different prices for the same plan.
+        let assistant = ["price_ai_monthly", "price_ai_annual"];
 
+        for price in assistant {
+            assert_eq!(
+                Plan::for_price(Some(price), &assistant),
+                Plan::SyncAndAssistant,
+                "{price}"
+            );
+        }
         assert_eq!(
-            Plan::for_price(Some("price_with_ai"), assistant),
-            Plan::SyncAndAssistant
+            Plan::for_price(Some("price_sync_monthly"), &assistant),
+            Plan::Sync
         );
-        assert_eq!(Plan::for_price(Some("price_sync"), assistant), Plan::Sync);
     }
 
     #[test]
     fn anything_unrecognised_fails_closed() {
         // A price this build has never seen, a subscription recorded
         // before prices were distinguished, or a deployment that sells
-        // no assistant at all. None of them may hand out model usage
-        // nobody is paying for.
-        let assistant = Some("price_with_ai");
+        // no assistant at all. None may hand out model usage nobody
+        // is paying for.
+        let assistant = ["price_ai_monthly", "price_ai_annual"];
 
-        assert_eq!(Plan::for_price(None, assistant), Plan::Sync);
+        assert_eq!(Plan::for_price(None, &assistant), Plan::Sync);
         assert_eq!(
-            Plan::for_price(Some("price_unknown"), assistant),
+            Plan::for_price(Some("price_unknown"), &assistant),
             Plan::Sync
         );
-        // And a deployment that has configured no assistant price
-        // cannot be talked into one by any price id at all.
-        assert_eq!(Plan::for_price(Some("price_with_ai"), None), Plan::Sync);
-        assert!(!Plan::for_price(Some("price_with_ai"), None).includes_assistant());
+        // And a deployment selling no assistant cannot be talked into
+        // one by any price id at all.
+        assert_eq!(Plan::for_price(Some("price_ai_annual"), &[]), Plan::Sync);
+        assert!(!Plan::for_price(Some("price_ai_annual"), &[]).includes_assistant());
     }
 
     #[test]
@@ -474,7 +481,7 @@ mod tests {
 
         assert_eq!(subscription.entitlement().assistant_turns, None);
         assert_eq!(
-            subscription.plan(Some("price_with_ai")),
+            subscription.plan(&["price_with_ai"]),
             Plan::SyncAndAssistant
         );
     }

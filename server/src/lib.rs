@@ -11,6 +11,7 @@ pub mod error;
 pub mod hub;
 pub mod mail;
 pub mod pages;
+pub mod ratelimit;
 pub mod routes;
 pub mod store;
 

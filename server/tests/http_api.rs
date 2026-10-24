@@ -1659,6 +1659,96 @@ async fn a_non_member_cannot_list_who_has_been_invited() {
     assert_eq!(response.status(), 404);
 }
 
+// --- rate limiting ----------------------------------------------------------
+
+#[tokio::test]
+async fn an_open_signup_page_cannot_be_used_to_farm_accounts() {
+    // Five an hour from one address. Without this, an open signup
+    // page is an invitation to fill somebody else's database.
+    let server = start(SignupMode::Open).await;
+
+    let mut statuses = Vec::new();
+    for n in 0..7 {
+        let response = server
+            .post(
+                "/v1/auth/register",
+                json!({ "email": format!("farm{n}@example.com"),
+                        "password": "correct horse battery" }),
+            )
+            .await;
+        statuses.push(response.status().as_u16());
+    }
+
+    assert_eq!(&statuses[..5], &[200, 200, 200, 200, 200], "{statuses:?}");
+    assert_eq!(&statuses[5..], &[429, 429], "{statuses:?}");
+}
+
+#[tokio::test]
+async fn being_throttled_says_when_to_come_back() {
+    let server = start(SignupMode::Open).await;
+    for n in 0..5 {
+        server
+            .post(
+                "/v1/auth/register",
+                json!({ "email": format!("f{n}@example.com"),
+                        "password": "correct horse battery" }),
+            )
+            .await;
+    }
+
+    let refused = server
+        .post(
+            "/v1/auth/register",
+            json!({ "email": "one-more@example.com", "password": "correct horse battery" }),
+        )
+        .await;
+
+    assert_eq!(refused.status(), 429);
+    assert!(
+        refused.headers().contains_key("retry-after"),
+        "no retry-after header"
+    );
+    let body: Value = refused.json().await.unwrap();
+    assert_eq!(body["error"], "tooManyRequests");
+}
+
+#[tokio::test]
+async fn running_out_of_signups_does_not_stop_anyone_signing_in() {
+    // Separate allowances. Otherwise somebody hammering registration
+    // locks the building out of its own workspaces.
+    let server = start(SignupMode::Open).await;
+    server.sign_up("ada@example.com").await;
+
+    for n in 0..6 {
+        server
+            .post(
+                "/v1/auth/register",
+                json!({ "email": format!("f{n}@example.com"),
+                        "password": "correct horse battery" }),
+            )
+            .await;
+    }
+
+    let login = server
+        .post(
+            "/v1/auth/login",
+            json!({ "email": "ada@example.com", "password": "correct horse battery" }),
+        )
+        .await;
+    assert_eq!(login.status(), 200, "signing in was collateral damage");
+}
+
+#[tokio::test]
+async fn reading_the_signup_page_is_not_rationed() {
+    // A page view costs nothing. Somebody refreshing the form must
+    // not spend the allowance for submitting it.
+    let server = start(SignupMode::Open).await;
+
+    for _ in 0..20 {
+        assert_eq!(server.get("/signup").await.status(), 200);
+    }
+}
+
 // --- the hosted assistant ---------------------------------------------------
 
 /// A server that runs the assistant on its own key.
@@ -1673,7 +1763,7 @@ async fn start_hosting_assistant() -> TestServer {
         stripe_secret_key: Some("sk_test_whatever".into()),
         stripe_webhook_secret: Some(WEBHOOK_SECRET.into()),
         stripe_price_id: Some("price_seat".into()),
-        stripe_price_assistant: Some("price_with_ai".into()),
+        stripe_price_assistant_annual: Some("price_with_ai".into()),
         assistant_key: Some("sk-ant-not-used-here".into()),
         assistant_turns: 3,
         ..Config::default()
@@ -1721,7 +1811,7 @@ async fn a_server_that_hosts_no_assistant_says_so_kindly() {
 async fn the_cheaper_plan_does_not_include_the_assistant() {
     let server = start_hosting_assistant().await;
     let token = owner_with_workspace(&server).await;
-    subscribe(&server, "w1", "price_seat").await;
+    subscribe(&server, "w1", "price_sync_annual").await;
 
     let body: Value = server
         .get_auth("/v1/assistant/usage", &token)

@@ -574,7 +574,7 @@ pub async fn allowance_for(state: &AppState, user_id: &str) -> ServerResult<Allo
         return Ok(Allowance::decide(None, AssistantUsage::default()));
     }
 
-    let assistant_price = state.config.stripe_price_assistant.as_deref();
+    let assistant_prices = state.config.assistant_prices();
     let subscriptions = state.store.subscriptions_for_user(user_id).await?;
 
     // The best plan any of their workspaces is on. Somebody in a paid
@@ -582,7 +582,7 @@ pub async fn allowance_for(state: &AppState, user_id: &str) -> ServerResult<Allo
     // for a plan they already have would be the wrong answer.
     let included = subscriptions
         .iter()
-        .any(|s| s.status.entitles() && s.plan(assistant_price).includes_assistant())
+        .any(|s| s.status.entitles() && s.plan(&assistant_prices).includes_assistant())
         .then_some(state.config.assistant_turns);
 
     let period = crate::billing::period_start(Timestamp::now().as_millis());

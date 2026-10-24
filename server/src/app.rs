@@ -30,6 +30,8 @@ pub struct AppState {
     pub mailer: Arc<dyn crate::mail::Mailer>,
     /// Stripe, when this deployment charges. `None` is self-hosting.
     pub stripe: Option<Arc<crate::billing::stripe::Stripe>>,
+    /// Throttles the routes that cost something to abuse.
+    pub limiter: crate::ratelimit::RateLimiter,
 }
 
 impl std::fmt::Debug for AppState {
@@ -86,6 +88,7 @@ impl AppState {
             config: Arc::new(config),
             mailer,
             stripe,
+            limiter: crate::ratelimit::RateLimiter::new(),
         }
     }
 
@@ -183,22 +186,12 @@ pub fn router(state: AppState) -> Router {
             "/auth/reset",
             get(crate::pages::reset_form).post(crate::pages::reset_submit),
         )
-        .route("/v1/auth/register", post(routes::register))
-        .route("/v1/auth/login", post(routes::login))
         // Authenticated.
         .route("/v1/auth/me", get(routes::me))
         .route("/v1/auth/logout", post(routes::logout))
         .route(
-            "/v1/auth/verify/request",
-            post(routes::request_verification),
-        )
-        .route(
             "/v1/auth/verify/confirm",
             post(routes::confirm_verification),
-        )
-        .route(
-            "/v1/auth/password/reset",
-            post(routes::request_password_reset),
         )
         .route(
             "/v1/auth/password/confirm",
@@ -239,10 +232,6 @@ pub fn router(state: AppState) -> Router {
         // Registration from a browser, for anyone who has not installed
         // Relay yet. The page says so itself when this server is
         // invite-only or closed.
-        .route(
-            "/signup",
-            get(crate::pages::signup_form).post(crate::pages::signup_submit),
-        )
         .route("/billing/done", get(crate::pages::billing_done))
         .route("/billing/cancelled", get(crate::pages::billing_cancelled))
         .route("/v1/invitations/{token}", get(routes::invitation_offer))
@@ -259,6 +248,47 @@ pub fn router(state: AppState) -> Router {
             delete(routes::delete_member),
         )
         .route("/v1/workspaces/{id}/ws", get(routes::websocket))
+        // Throttled. Each group has its own allowance, so grinding
+        // passwords cannot also stop anybody signing up. Safe methods
+        // are never counted — the GET of /signup is a page view.
+        .merge(
+            Router::new()
+                .route("/v1/auth/register", post(routes::register))
+                .route(
+                    "/signup",
+                    get(crate::pages::signup_form).post(crate::pages::signup_submit),
+                )
+                .route_layer(axum::middleware::from_fn_with_state(
+                    state.clone(),
+                    crate::ratelimit::signup,
+                ))
+                .with_state(state.clone()),
+        )
+        .merge(
+            Router::new()
+                .route("/v1/auth/login", post(routes::login))
+                .route_layer(axum::middleware::from_fn_with_state(
+                    state.clone(),
+                    crate::ratelimit::sign_in,
+                ))
+                .with_state(state.clone()),
+        )
+        .merge(
+            Router::new()
+                .route(
+                    "/v1/auth/verify/request",
+                    post(routes::request_verification),
+                )
+                .route(
+                    "/v1/auth/password/reset",
+                    post(routes::request_password_reset),
+                )
+                .route_layer(axum::middleware::from_fn_with_state(
+                    state.clone(),
+                    crate::ratelimit::sends_mail,
+                ))
+                .with_state(state.clone()),
+        )
         .layer(RequestBodyLimitLayer::new(limit))
         .layer(TraceLayer::new_for_http())
         .with_state(state)

@@ -1771,11 +1771,11 @@ async fn the_price_a_workspace_pays_survives_a_round_trip() {
         let read = store.subscription("w1").await.unwrap().unwrap();
         assert_eq!(read.price_id.as_deref(), Some("price_with_ai"));
         assert_eq!(
-            read.plan(Some("price_with_ai")),
+            read.plan(&["price_with_ai"]),
             relay_server::billing::Plan::SyncAndAssistant
         );
         assert_eq!(
-            read.plan(Some("price_other")),
+            read.plan(&["price_other"]),
             relay_server::billing::Plan::Sync,
             "an unrecognised price must not include the assistant"
         );
@@ -1797,7 +1797,7 @@ async fn a_subscription_predating_prices_reads_as_sync_only() {
 
         let read = store.subscription("w1").await.unwrap().unwrap();
         assert_eq!(read.price_id, None);
-        assert!(!read.plan(Some("price_with_ai")).includes_assistant());
+        assert!(!read.plan(&["price_with_ai"]).includes_assistant());
     })
     .await;
 }

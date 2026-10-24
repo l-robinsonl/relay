@@ -77,9 +77,15 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let actual = listener.local_addr()?;
     tracing::info!(%actual, signup = %signup, "relay-server listening");
 
-    axum::serve(listener, router(state))
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+    // With connect info, so the rate limiter can tell callers apart.
+    // Behind a proxy every request arrives from the proxy, which is
+    // what RELAY_TRUST_FORWARDED_FOR is for.
+    axum::serve(
+        listener,
+        router(state).into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await?;
 
     tracing::info!("relay-server stopped");
     Ok(())

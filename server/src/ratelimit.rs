@@ -27,7 +27,9 @@ use crate::app::AppState;
 /// How many requests a caller gets, and over how long.
 #[derive(Debug, Clone, Copy)]
 pub struct Quota {
+    /// How many requests are allowed in a window.
     pub requests: u32,
+    /// How long the window lasts.
     pub per: Duration,
 }
 
@@ -77,6 +79,7 @@ impl std::fmt::Debug for RateLimiter {
 }
 
 impl RateLimiter {
+    /// An empty limiter. Allowances build up as callers arrive.
     pub fn new() -> Self {
         Self::default()
     }
@@ -139,8 +142,8 @@ impl RateLimiter {
 ///
 /// Hence the configuration switch, and hence it defaulting to off.
 pub fn caller(headers: &HeaderMap, peer: Option<SocketAddr>, trust_forwarded: bool) -> String {
-    if trust_forwarded {
-        if let Some(forwarded) = headers
+    if trust_forwarded
+        && let Some(forwarded) = headers
             .get("x-forwarded-for")
             .and_then(|v| v.to_str().ok())
             // Leftmost: the original client. Everything after it is
@@ -149,9 +152,8 @@ pub fn caller(headers: &HeaderMap, peer: Option<SocketAddr>, trust_forwarded: bo
             .map(str::trim)
             .filter(|v| !v.is_empty())
             .and_then(|v| v.parse::<IpAddr>().ok())
-        {
-            return forwarded.to_string();
-        }
+    {
+        return forwarded.to_string();
     }
 
     peer.map(|p| p.ip().to_string())
@@ -166,15 +168,26 @@ pub async fn limit(
     quota: Quota,
     bucket: &'static str,
     State(state): State<AppState>,
-    connect: Option<ConnectInfo<SocketAddr>>,
     request: Request,
     next: Next,
 ) -> Response {
-    let who = caller(
-        request.headers(),
-        connect.map(|ConnectInfo(addr)| addr),
-        state.config.trust_forwarded_for,
-    );
+    // Reading a page costs nothing and must not spend the allowance
+    // for submitting it: somebody refreshing the signup form would
+    // otherwise lock themselves out of using it.
+    if request.method().is_safe() {
+        return next.run(request).await;
+    }
+
+    // Read from extensions rather than extracted: `ConnectInfo` is
+    // only there when the server was started with
+    // `into_make_service_with_connect_info`, and a limiter that
+    // refused to compile without it would be easy to leave out.
+    let peer = request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|ConnectInfo(addr)| *addr);
+
+    let who = caller(request.headers(), peer, state.config.trust_forwarded_for);
 
     match state.limiter.check(&who, bucket, quota) {
         Ok(()) => next.run(request).await,
@@ -191,6 +204,21 @@ pub async fn limit(
                 .into_response()
         }
     }
+}
+
+/// Creating accounts.
+pub async fn signup(state: State<AppState>, request: Request, next: Next) -> Response {
+    limit(Quota::SIGNUP, "signup", state, request, next).await
+}
+
+/// Signing in.
+pub async fn sign_in(state: State<AppState>, request: Request, next: Next) -> Response {
+    limit(Quota::SIGN_IN, "signin", state, request, next).await
+}
+
+/// Anything that puts a message in somebody's inbox on request.
+pub async fn sends_mail(state: State<AppState>, request: Request, next: Next) -> Response {
+    limit(Quota::SENDS_MAIL, "mail", state, request, next).await
 }
 
 #[cfg(test)]

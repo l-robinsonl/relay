@@ -66,9 +66,15 @@ pub struct Config {
     /// Where the customer portal sends people back to.
     pub stripe_return_url: Option<String>,
 
-    /// The Stripe price that includes the hosted assistant. Any other
-    /// price is sync only.
-    pub stripe_price_assistant: Option<String>,
+    /// The Stripe price for sync, billed monthly.
+    pub stripe_price_sync_monthly: Option<String>,
+    /// The Stripe price for sync, billed annually — the cheaper
+    /// per-month option, which is why anyone picks it.
+    pub stripe_price_sync_annual: Option<String>,
+    /// Sync and the assistant, billed monthly.
+    pub stripe_price_assistant_monthly: Option<String>,
+    /// Sync and the assistant, billed annually.
+    pub stripe_price_assistant_annual: Option<String>,
     /// The provider key the server uses on a subscriber's behalf.
     /// Unset means this deployment hosts no assistant at all.
     pub assistant_key: Option<String>,
@@ -78,6 +84,15 @@ pub struct Config {
     pub assistant_model: String,
     /// Turns included per person per calendar month.
     pub assistant_turns: u32,
+
+    /// Whether `X-Forwarded-For` can be believed.
+    ///
+    /// Required behind a proxy — Render, Caddy, anything — or every
+    /// caller shares the proxy's address and the first person to
+    /// sign up locks out the rest. Must stay off on a directly
+    /// exposed server, where a client can set the header itself and
+    /// so hand itself an unlimited supply of identities.
+    pub trust_forwarded_for: bool,
     /// Whether an unverified account may sign in.
     ///
     /// Off by default so a self-hosted server with no mail provider
@@ -127,7 +142,10 @@ impl Config {
             stripe_webhook_secret: non_empty("STRIPE_WEBHOOK_SECRET"),
             stripe_price_id: non_empty("STRIPE_PRICE_SEAT_ANNUAL"),
             stripe_return_url: non_empty("STRIPE_PORTAL_RETURN_URL"),
-            stripe_price_assistant: non_empty("STRIPE_PRICE_SEAT_ASSISTANT"),
+            stripe_price_sync_monthly: non_empty("STRIPE_PRICE_SYNC_MONTHLY"),
+            stripe_price_sync_annual: non_empty("STRIPE_PRICE_SYNC_ANNUAL"),
+            stripe_price_assistant_monthly: non_empty("STRIPE_PRICE_ASSISTANT_MONTHLY"),
+            stripe_price_assistant_annual: non_empty("STRIPE_PRICE_ASSISTANT_ANNUAL"),
             assistant_key: non_empty("RELAY_ASSISTANT_KEY"),
             assistant_model: std::env::var("RELAY_ASSISTANT_MODEL")
                 .ok()
@@ -137,6 +155,7 @@ impl Config {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(1000),
+            trust_forwarded_for: flag("RELAY_TRUST_FORWARDED_FOR", false),
         })
     }
 }
@@ -168,10 +187,14 @@ impl Default for Config {
             stripe_webhook_secret: None,
             stripe_price_id: None,
             stripe_return_url: None,
-            stripe_price_assistant: None,
+            stripe_price_sync_monthly: None,
+            stripe_price_sync_annual: None,
+            stripe_price_assistant_monthly: None,
+            stripe_price_assistant_annual: None,
             assistant_key: None,
             assistant_model: "claude-haiku-5-5".into(),
             assistant_turns: 1000,
+            trust_forwarded_for: false,
         }
     }
 }
@@ -183,7 +206,18 @@ impl Config {
     /// sell it against would hand model usage to everybody, and a
     /// price with no key would charge for something that cannot work.
     pub fn hosts_assistant(&self) -> bool {
-        self.assistant_key.is_some() && self.stripe_price_assistant.is_some()
+        self.assistant_key.is_some() && !self.assistant_prices().is_empty()
+    }
+
+    /// Every price that includes the assistant.
+    pub fn assistant_prices(&self) -> Vec<&str> {
+        [
+            self.stripe_price_assistant_monthly.as_deref(),
+            self.stripe_price_assistant_annual.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .collect()
     }
 
     /// True when this deployment charges for seats.

@@ -72,8 +72,20 @@ services:
         sync: false
       - key: STRIPE_WEBHOOK_SECRET
         sync: false
-      - key: STRIPE_PRICE_SEAT_ANNUAL
+      - key: STRIPE_PRICE_SYNC_MONTHLY
         sync: false
+      - key: STRIPE_PRICE_SYNC_ANNUAL
+        sync: false
+      - key: STRIPE_PRICE_ASSISTANT_MONTHLY
+        sync: false
+      - key: STRIPE_PRICE_ASSISTANT_ANNUAL
+        sync: false
+
+      # Required on Render: every request arrives from their proxy,
+      # so without this the rate limiter treats the whole internet as
+      # one caller.
+      - key: RELAY_TRUST_FORWARDED_FOR
+        value: "true"
 
       - key: RELAY_LOG
         value: info,sqlx=warn
