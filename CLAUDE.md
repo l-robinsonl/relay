@@ -24,6 +24,7 @@ Stripe account. Nothing is signed and nothing is deployed.
 | Works | |
 |---|---|
 | HTTP engine | all methods, every body mode, auth, redirects, cookies, proxies, client certs, cancellation, bounded/spooled responses |
+| Protocols | HTTP, GraphQL (with introspection), server-sent events and websockets, all picked from the method dropdown; streams share one log panel, websockets have a composer |
 | Local storage | SQLite WAL, migrations, tombstones, revisions |
 | Variables | `{{name}}` across workspace/collection/environment/request, documented precedence, secrets in the OS credential store |
 | Import | OpenAPI 3 (JSON+YAML), Postman v2.1 + environments, cURL, Relay exports |
@@ -51,8 +52,8 @@ Stripe account. Nothing is signed and nothing is deployed.
 
 ```sh
 . "$HOME/.cargo/env"            # rustup installed with --no-modify-path
-cargo test --workspace          # 739
-npm test                        # 161 frontend
+cargo test --workspace          # 933
+npm test                        # 248 frontend
 cargo clippy --workspace --all-targets -- -D warnings
 npm run build
 npm run bindings                # regenerate TS from Rust; must be a no-op
@@ -272,6 +273,43 @@ explanation. `CARGO_BUILD_JOBS=4` in front of it is the fix.
   in two crates spelled out every field, so each new setting broke
   them all. `from_env` stays an exhaustive struct literal — a new
   setting must still be read from the environment deliberately.
+- **A protocol is a `RequestKind`, not a second document type.**
+  `RequestKind` is `Http`, `Sse` or `WebSocket` on the same
+  `RequestDoc`, so a websocket inherits the URL, headers, variables,
+  authentication, environment, collection, history and sync that the
+  HTTP request already had. A parallel type would have needed all of
+  that again. It is chosen from the method dropdown because the
+  question is the same one — what kind of call is this — and because
+  a method means nothing for a connection.
+- **One log type for both streams.** `StreamMessage` carries a
+  direction, a name, the payload and an optional id, and a
+  `ServerEvent` converts into one. Two shapes would have made the
+  panel branch, and would have needed a third when history or export
+  learns about streams.
+- **Sending on server-sent events is refused, not swallowed.** The
+  registry holds an outbound channel only for a websocket, so
+  `stream_send` on an SSE stream returns "one-way" rather than
+  accepting a message into a void.
+- **Websockets refuse what they cannot honour.** The TLS verification
+  toggle and the proxy are not wired through `tokio-tungstenite`, so
+  `connect` returns a message naming the limit rather than connecting
+  with verification the person had switched off. Same rule as MCP over
+  HTTP: a setting silently dropped is worse than one that is missing.
+- **`EngineError::Stream` keeps a connection failure out of
+  `InvalidUrl`.** Neither the events reader nor the websocket goes
+  through reqwest's error type, and the first cut of each reported a
+  dead endpoint as a bad URL — which sends the person to edit the one
+  thing that was right.
+- **A listener is a top-level export, never a member of `api`.**
+  `onStreamEvent` was put in `api` while `onExecutionProgress` and
+  `onSyncEvent` are exports, so the AppLayout test's mock registered
+  nothing and the test still passed. Keeping them together is what
+  makes a mock that misses one fail.
+- **The mount hook does not stop at the first failure.** It was a
+  chain of awaits, so a listener that could not register skipped
+  everything after it — including the line that opens a tab, leaving a
+  blank window with no message. `optional()` in `AppLayout.vue` wraps
+  each thing the application is useful without.
 - **rusqlite pinned to 0.39.** 0.40 needs libsqlite3-sys 0.38; sqlx-sqlite
   needs <0.38; both link native sqlite3. Do not bump without checking.
 
@@ -381,11 +419,14 @@ like there.
 [width] [height]` runs a component's `*.shot.test.ts`, renders the
 markup against the real built stylesheet at a realistic width, and
 photographs both themes. Cameras are skipped unless `RELAY_SHOTS=1`.
-Nine panels have been through it: billing, the tool approval row,
+Ten panels have been through it: billing, the tool approval row,
 test results, members, MCP servers, assistant settings, the chat
-panel, conflicts and the scripts editor. Five real bugs came out of
-looking, none of which any test would have caught. Still unphotographed:
-the invited-join tab and the request/response editors.
+panel, conflicts, the scripts editor and the stream log. Seven real
+bugs came out of looking, none of which any test would have caught —
+the most recent being a websocket transcript whose direction arrows
+were too quiet to read, and every line labelled `text`. Still
+unphotographed: the invited-join tab and the request/response
+editors.
 
 Two things it cannot see, both already paid for:
 
@@ -412,6 +453,10 @@ Two things it cannot see, both already paid for:
 
 ## Next
 
+0. **Protocols, what is left.** gRPC and socket.io are the two Yaak
+   has that Relay does not. Streams are also not in history, not in
+   export and not in the assistant's tools — a websocket is savable
+   and syncable but a transcript is not kept.
 1. **Hosting the assistant** — `docs/ASSISTANT-HOSTING.md`, designed
    and not built. The paid tier is £5 per person per month covering
    sync and the assistant, which needs the server to hold a provider
