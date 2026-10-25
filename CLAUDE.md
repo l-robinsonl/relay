@@ -53,8 +53,8 @@ Stripe account. Nothing is signed and nothing is deployed.
 
 ```sh
 . "$HOME/.cargo/env"            # rustup installed with --no-modify-path
-cargo test --workspace          # 980
-npm test                        # 266 frontend
+cargo test --workspace          # 986
+npm test                        # 273 frontend
 cargo clippy --workspace --all-targets -- -D warnings
 npm run build
 npm run bindings                # regenerate TS from Rust; must be a no-op
@@ -226,6 +226,23 @@ explanation. `CARGO_BUILD_JOBS=4` in front of it is the fix.
   following the URL the recipient is handed. `server/src/pages.rs`
   serves the two pages; `http_api.rs` has tests that follow the link out
   of the message body. Add one whenever a flow sends a URL.
+- **A price's amount comes from Stripe, never from a setting.**
+  `Stripe::price()` reads it and caches it for the process; Stripe's
+  amounts are immutable, so a change means a new price id and there
+  is nothing to go stale. A figure typed into config is a figure that
+  can disagree with the card charge, and the button taking the money
+  is the last place that should happen.
+- **`Config::plans()` is the only thing that knows what is for sale.**
+  Cheapest first, and only the prices actually configured. The
+  checkout refuses a plan by name and lists what it does sell —
+  substituting the default would charge somebody for something they
+  did not pick. `STRIPE_PRICE_SEAT_ANNUAL` survives as a spelling of
+  the annual-sync price so an older deployment keeps working, and
+  `bills()` asks for *a* price rather than that one.
+- **The plan chooser follows the button, not `hasSubscription`.** A
+  cancelled subscription still counts as having one but still falls
+  through to a fresh checkout, so tying the chooser to the wrong
+  condition left renewals silently taking the default.
 - **Seats bind on growth, by both routes in.** `create_invitation`
   and `upsert_membership` each check the entitlement, inside
   `SyncStore` for the same reason authorisation is. Gating only the
