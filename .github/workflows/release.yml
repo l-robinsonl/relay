@@ -43,6 +43,10 @@ jobs:
       # `apps/desktop/src-tauri/target/` — so every platform built
       # its installers and then uploaded nothing, and the tag
       # produced no release at all.
+      #
+      # Building for a named target moves the output again, to
+      # `target/<triple>/release/bundle/`. The macOS row below is the
+      # only one that does, and its path says so.
       matrix:
         include:
           - os: ubuntu-latest
@@ -55,8 +59,15 @@ jobs:
               target/release/bundle/appimage/*.AppImage
           - os: macos-latest
             name: macOS
+            # One .dmg for both chips. `macos-latest` is Apple
+            # Silicon, so an ordinary build leaves every Intel Mac
+            # with nothing to download — and asking somebody which
+            # processor their laptop has is a question a download
+            # page should not need to ask.
+            targets: aarch64-apple-darwin,x86_64-apple-darwin
+            args: --target universal-apple-darwin
             artifacts: |
-              target/release/bundle/dmg/*.dmg
+              target/universal-apple-darwin/release/bundle/dmg/*.dmg
           - os: windows-latest
             name: Windows
             artifacts: |
@@ -69,6 +80,8 @@ jobs:
           ref: ${{ github.event.inputs.tag || github.ref }}
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.targets }}
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: '. -> target'
@@ -92,7 +105,7 @@ jobs:
       # With bundling, unlike CI's check build. This is the whole
       # point of the workflow.
       - name: Build the installers
-        run: npm run tauri build
+        run: npm run tauri build -- ${{ matrix.args }}
 
       - name: Collect them
         uses: actions/upload-artifact@v4
