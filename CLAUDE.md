@@ -24,7 +24,8 @@ Stripe account. Nothing is signed and nothing is deployed.
 | Works | |
 |---|---|
 | HTTP engine | all methods, every body mode, auth, redirects, cookies, proxies, client certs, cancellation, bounded/spooled responses |
-| Protocols | HTTP, GraphQL (with introspection), server-sent events and websockets, all picked from the method dropdown; streams share one log panel, websockets have a composer |
+| Protocols | HTTP, GraphQL (with introspection), server-sent events, websockets and **gRPC** (reflection, dynamic unary calls), all picked from the method dropdown; streams share one log panel, websockets have a composer |
+| Assistant streaming | the answer types itself out, on your own key and on the hosted tier; tool-call arguments reassembled from fragments |
 | Local storage | SQLite WAL, migrations, tombstones, revisions |
 | Variables | `{{name}}` across workspace/collection/environment/request, documented precedence, secrets in the OS credential store |
 | Import | OpenAPI 3 (JSON+YAML), Postman v2.1 + environments, cURL, Relay exports |
@@ -52,8 +53,8 @@ Stripe account. Nothing is signed and nothing is deployed.
 
 ```sh
 . "$HOME/.cargo/env"            # rustup installed with --no-modify-path
-cargo test --workspace          # 933
-npm test                        # 248 frontend
+cargo test --workspace          # 980
+npm test                        # 266 frontend
 cargo clippy --workspace --all-targets -- -D warnings
 npm run build
 npm run bindings                # regenerate TS from Rust; must be a no-op
@@ -87,6 +88,7 @@ explanation. `CARGO_BUILD_JOBS=4` in front of it is the fix.
 | Crate | Holds | Notes |
 |---|---|---|
 | `relay-models` | domain types, TS bindings via ts-rs | no I/O, no Relay deps |
+| `relay-grpc` | reflection, dynamic codec | no codegen, no protoc |
 | `relay-http` | the reqwest engine | knows nothing of workspaces |
 | `relay-storage` | SQLite, migrations, repos | tombstones, never hard deletes |
 | `relay-core` | interpolation, resolution, import/export | pure; no DB, no network |
@@ -273,6 +275,33 @@ explanation. `CARGO_BUILD_JOBS=4` in front of it is the fix.
   in two crates spelled out every field, so each new setting broke
   them all. `from_env` stays an exhaustive struct literal — a new
   setting must still be read from the environment deliberately.
+- **gRPC has no generated code, and must not need `protoc`.**
+  The service belongs to whoever is being tested and is described at
+  runtime by server reflection, so the message type is a
+  `MessageDescriptor` and the message a `DynamicMessage`.
+  `relay-grpc/src/codec.rs` teaches tonic to carry those. The four
+  reflection messages are hand-written with `prost::Message` rather
+  than generated: generating them would put protoc on every machine
+  that builds Relay and in CI. The test server in
+  `tests/against_a_server.rs` is hand-rolled for the same reason.
+  Both `v1` and `v1alpha` reflection are tried — plenty of running
+  servers only answer the older one.
+- **Streaming gRPC methods are listed and disabled.** Relay does
+  unary so far. Letting one be picked would fail on send, after the
+  click; greying it out says so before.
+- **A provider streams, and `Progress::delta` is how it shows.**
+  `complete_streaming` reports fragments and returns the same
+  `CompletionResponse` the plain path does, so the loop does not
+  care which ran. `said` still carries the whole message and is what
+  gets persisted — the panel replaces the fragments with it, so a
+  dropped delta cannot leave the window disagreeing with history.
+  Tool-call arguments arrive as JSON split at arbitrary points and
+  are only parsed once the block ends; the accumulators key them by
+  block index because two calls interleave.
+- **Cached input tokens are still input.** They cost a fraction, not
+  nothing, and a cost line that skipped them would understate every
+  turn after the first. OpenAI sends no usage during a stream unless
+  `stream_options.include_usage` is set.
 - **A protocol is a `RequestKind`, not a second document type.**
   `RequestKind` is `Http`, `Sse` or `WebSocket` on the same
   `RequestDoc`, so a websocket inherits the URL, headers, variables,
@@ -310,6 +339,10 @@ explanation. `CARGO_BUILD_JOBS=4` in front of it is the fix.
   everything after it — including the line that opens a tab, leaving a
   blank window with no message. `optional()` in `AppLayout.vue` wraps
   each thing the application is useful without.
+- **`REQUEST_COLUMNS` is appended to, never inserted into.** Every
+  `row.get(n)` in `repo.rs` counts along that list, so a column added
+  in the middle shifts fifteen of them — and it compiles. `kind` went
+  in the middle and cost an afternoon; `grpc_method` went on the end.
 - **rusqlite pinned to 0.39.** 0.40 needs libsqlite3-sys 0.38; sqlx-sqlite
   needs <0.38; both link native sqlite3. Do not bump without checking.
 
@@ -453,10 +486,11 @@ Two things it cannot see, both already paid for:
 
 ## Next
 
-0. **Protocols, what is left.** gRPC and socket.io are the two Yaak
-   has that Relay does not. Streams are also not in history, not in
-   export and not in the assistant's tools — a websocket is savable
-   and syncable but a transcript is not kept.
+0. **Protocols, what is left.** Streaming gRPC (server, client and
+   bidirectional) is listed but not callable; socket.io is the one
+   Yaak has that Relay does not. Streams are not in history and not
+   in the assistant's tools — a websocket is savable, syncable and
+   exportable, but its transcript is not kept.
 1. **Hosting the assistant** — `docs/ASSISTANT-HOSTING.md`, designed
    and not built. The paid tier is £5 per person per month covering
    sync and the assistant, which needs the server to hold a provider
@@ -477,6 +511,12 @@ Two things it cannot see, both already paid for:
    are both ready and neither has been run in anger.
 3. Signing, which needs certificates (~£99/yr Apple, ~£120/yr
    Windows).
+
+**`RELAY_ASSISTANT_BASE_URL` points the hosted proxy elsewhere.**
+For an organisation with a gateway in front of the API, and because
+without it the proxy could only be exercised against the real
+Anthropic — which is why it had never had a byte run through it in
+CI until it existed.
 
 **The assistant has a live test.** `crates/relay-app/tests/assistant_live.rs`
 runs the real loop against a real model, skipping unless
