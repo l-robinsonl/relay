@@ -89,7 +89,7 @@ const streamingCount = computed(() => methods.value.filter((m) => !callable(m)).
 </script>
 
 <template>
-  <div class="space-y-2">
+  <div class="space-y-2 p-4">
     <div class="flex items-center gap-2">
       <button type="button" class="btn py-1 text-xs" :disabled="loading" @click="load">
         <Loader2 v-if="loading" :size="12" class="animate-spin" />
