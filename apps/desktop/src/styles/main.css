@@ -437,6 +437,25 @@
   }
 
   /*
+   * Spinners wobble unless the browser is told to rasterise them once.
+   *
+   * A rotating SVG turns about the centre of its box. If that centre
+   * is not on a whole pixel — an odd `size`, or a fractional position
+   * handed down by a flex gap — the shape is redrawn at a slightly
+   * different subpixel offset every frame, and a 13px spinner visibly
+   * orbits its own centre.
+   *
+   * `will-change: transform` puts the element on its own layer, so the
+   * shape is drawn once and the *layer* is rotated. Keeping spinner
+   * sizes even removes the cause; this removes the whole class of it,
+   * including the positions nothing here controls.
+   */
+  .animate-spin {
+    will-change: transform;
+    transform-origin: 50% 50%;
+  }
+
+  /*
    * The cursor on an answer still being written.
    *
    * Inline and baseline-aligned so it sits at the end of the last

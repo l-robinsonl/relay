@@ -121,7 +121,7 @@ async function revoke (invitation: InvitationView) {
 <template>
   <div class="space-y-4">
     <div v-if="loading && members.length === 0" class="flex items-center gap-2 text-xs text-muted">
-      <Loader2 :size="13" class="animate-spin" />
+      <Loader2 :size="14" class="animate-spin" />
       Loading members…
     </div>
 
@@ -207,7 +207,7 @@ async function revoke (invitation: InvitationView) {
             :disabled="!canInvite || inviting"
             @click="invite"
           >
-            <Loader2 v-if="inviting" :size="13" class="animate-spin" />
+            <Loader2 v-if="inviting" :size="14" class="animate-spin" />
             <UserPlus v-else :size="13" />
             Invite
           </button>

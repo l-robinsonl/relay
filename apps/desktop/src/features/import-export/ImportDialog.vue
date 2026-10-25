@@ -300,7 +300,7 @@ async function apply () {
             :disabled="applying || total === 0"
             @click="apply"
           >
-            <Loader2 v-if="applying" :size="13" class="animate-spin" />
+            <Loader2 v-if="applying" :size="14" class="animate-spin" />
             Import {{ total }} object{{ total === 1 ? '' : 's' }}
           </button>
         </footer>

@@ -253,7 +253,7 @@ async function manage () {
         :disabled="working"
         @click="action?.run()"
       >
-        <Loader2 v-if="working" :size="13" class="animate-spin" />
+        <Loader2 v-if="working" :size="14" class="animate-spin" />
         <CreditCard v-else :size="13" />
         {{ action?.label }}
       </button>

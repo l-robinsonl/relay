@@ -69,7 +69,7 @@ function activate () {
   >
     <component
       :is="appearance.icon"
-      :size="13"
+      :size="14"
       :class="sync.phase === 'syncing' && 'animate-spin'"
     />
     <span>{{ sync.label }}</span>

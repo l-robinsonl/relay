@@ -121,7 +121,7 @@ const sendShortcut = describeShortcut({ key: 'Enter', mod: true })
       aria-live="polite"
     >
       <template v-if="sending">
-        <Loader2 :size="13" class="animate-spin" :style="{ color: 'var(--accent)' }" />
+        <Loader2 :size="14" class="animate-spin" :style="{ color: 'var(--accent)' }" />
         <span class="text-xs text-secondary">Sending…</span>
         <span v-if="tab.bytesRead" class="text-xs tabular-nums text-muted">
           {{ formatBytes(tab.bytesRead) }} received

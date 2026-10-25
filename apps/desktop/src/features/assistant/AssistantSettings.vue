@@ -216,7 +216,7 @@ async function forget () {
             :disabled="saving"
             @click="save"
           >
-            <Loader2 v-if="saving" :size="13" class="animate-spin" />
+            <Loader2 v-if="saving" :size="14" class="animate-spin" />
             Save
           </button>
         </footer>

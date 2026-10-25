@@ -357,7 +357,7 @@ defineExpose({ hydrate, startOver })
           aria-label="Send"
           @click="ask"
         >
-          <Loader2 v-if="thinking" :size="13" class="animate-spin" />
+          <Loader2 v-if="thinking" :size="14" class="animate-spin" />
           <Send v-else :size="13" />
         </button>
       </div>

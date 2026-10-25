@@ -329,7 +329,7 @@ async function disconnect () {
                 :disabled="sync.syncing"
                 @click="sync.syncNow()"
               >
-                <Loader2 v-if="sync.syncing" :size="13" class="animate-spin" />
+                <Loader2 v-if="sync.syncing" :size="14" class="animate-spin" />
                 Sync now
               </button>
               <button type="button" class="btn text-xs" @click="disconnect">
@@ -432,7 +432,7 @@ async function disconnect () {
                   :disabled="probing || !serverUrl.trim()"
                   @click="probe"
                 >
-                  <Loader2 v-if="probing" :size="13" class="animate-spin" />
+                  <Loader2 v-if="probing" :size="14" class="animate-spin" />
                   {{ probing ? 'Checking' : 'Check' }}
                 </button>
               </div>
@@ -600,7 +600,7 @@ async function disconnect () {
                   :disabled="busy !== '' || !email.trim()"
                   @click="resendVerification"
                 >
-                  <Loader2 v-if="busy === 'verify'" :size="13" class="animate-spin" />
+                  <Loader2 v-if="busy === 'verify'" :size="14" class="animate-spin" />
                   Send another link
                 </button>
               </div>
@@ -656,7 +656,7 @@ async function disconnect () {
                 :disabled="!canJoin || busy !== ''"
                 @click="joinInvited"
               >
-                <Loader2 v-if="busy === 'join'" :size="13" class="animate-spin" />
+                <Loader2 v-if="busy === 'join'" :size="14" class="animate-spin" />
                 Join {{ offer ? offer.workspaceName : 'the workspace' }}
               </button>
               <button
@@ -666,7 +666,7 @@ async function disconnect () {
                 :disabled="!canRegister || busy !== ''"
                 @click="register"
               >
-                <Loader2 v-if="busy === 'register'" :size="13" class="animate-spin" />
+                <Loader2 v-if="busy === 'register'" :size="14" class="animate-spin" />
                 Create the account
               </button>
               <button
@@ -676,7 +676,7 @@ async function disconnect () {
                 :disabled="!canConnect || connecting"
                 @click="connect"
               >
-                <Loader2 v-if="connecting" :size="13" class="animate-spin" />
+                <Loader2 v-if="connecting" :size="14" class="animate-spin" />
                 Connect and sync
               </button>
             </template>
