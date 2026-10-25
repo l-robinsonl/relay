@@ -68,8 +68,8 @@ RELAY_TEST_POSTGRES_URL="$RELAY_DATABASE_URL" \
 ```
 
 Run it: `npm run tauri dev`, or build it with
-**`npm run tauri build -- --no-bundle`** and run
-`target/release/relay-desktop`.
+**`npm exec --workspace=@relay/desktop -- tauri build --no-bundle`**
+and run `target/release/relay-desktop`.
 
 **Never build the desktop app with plain `cargo build --release`.**
 It compiles and produces a binary at the same path, and that binary
@@ -375,6 +375,16 @@ explanation. `CARGO_BUILD_JOBS=4` in front of it is the fix.
 - **Electron apps will not launch from a terminal inside VS Code.** The
   editor exports `ELECTRON_RUN_AS_NODE=1`; the binary obeys it, starts as
   Node and dies on `--no-sandbox`. Unset `ELECTRON_*` and `VSCODE_*`.
+- **`npm run x -- --flag` does not pass `--flag`.** npm parses what
+  follows its own `--` against its own config and keeps anything it
+  recognises. `--target` and `--no-bundle` are both npm keys, so
+  `npm run tauri build -- --target universal-apple-darwin` reached
+  Tauri as `tauri build universal-apple-darwin` — flag gone, value
+  loose — and `-- --no-bundle` bundled anyway. npm says
+  `"x" is being parsed as a normal command line argument` and carries
+  on. Use `npm exec --workspace=<pkg> -- tauri build --flag`, which
+  forwards verbatim. This cost a release: the universal macOS build
+  failed on it, and the `--no-bundle` in this file had never worked.
 - **`pkill -f 'some-pattern'` matches this shell's own command line** and
   kills the session (exit 144). Use `pkill -x name`, or a bracket class:
   `pgrep -f 'nam[e]'`.

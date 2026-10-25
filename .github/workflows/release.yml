@@ -104,8 +104,15 @@ jobs:
 
       # With bundling, unlike CI's check build. This is the whole
       # point of the workflow.
+      # `npm exec --`, not `npm run -- `. npm parses what follows its
+      # own `--` against its own config and keeps anything it
+      # recognises: `--target` is one of its keys, so
+      # `npm run tauri build -- --target universal-apple-darwin`
+      # reaches Tauri as `tauri build universal-apple-darwin`, with
+      # the flag gone and the value loose. It warns, in a line nobody
+      # reads, and then builds the wrong thing.
       - name: Build the installers
-        run: npm run tauri build -- ${{ matrix.args }}
+        run: npm exec --workspace=@relay/desktop -- tauri build ${{ matrix.args }}
 
       - name: Collect them
         uses: actions/upload-artifact@v4
