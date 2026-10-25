@@ -9,9 +9,14 @@ description = "The assistant: an agent loop, its tools, and the providers behind
 
 [dependencies]
 relay-models.workspace = true
+# For the server-sent events parser. Streaming replies arrive as SSE
+# from every provider, and the one in relay-http already handles the
+# chunk boundaries that make writing a second one a mistake.
+relay-http.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 async-trait = "0.1"
+ts-rs.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true

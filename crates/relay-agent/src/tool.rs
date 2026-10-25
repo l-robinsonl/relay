@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use ts_rs::TS;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{AgentError, AgentResult};
@@ -14,8 +15,9 @@ use crate::error::{AgentError, AgentResult};
 /// through `Send`, over other people's servers. The interface decides
 /// what to confirm from this, so getting a tool's classification right
 /// matters more than most things in this crate.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub enum ToolRisk {
     /// Looks at what is already there. Runs without asking.
     Read,
@@ -64,8 +66,9 @@ pub trait Tool: Send + Sync + 'static {
 }
 
 /// What a tool produced.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct ToolOutcome {
     /// What the model is told. Keep it small: this goes back into the
     /// context on every subsequent turn of the conversation.
@@ -96,20 +99,23 @@ impl ToolOutcome {
 }
 
 /// A call the model asked for.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct ToolCall {
     /// The provider's id for this call, echoed back with the result.
     pub id: String,
     /// Which tool.
     pub name: String,
     /// Its arguments, as the model produced them.
+    #[ts(type = "unknown")]
     pub input: serde_json::Value,
 }
 
 /// A call paired with what it produced.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 pub struct ToolResult {
     /// Which call this answers.
     pub call_id: String,

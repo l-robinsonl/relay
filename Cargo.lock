@@ -3485,6 +3485,7 @@ dependencies = [
  "async-trait",
  "axum",
  "futures-util",
+ "relay-http",
  "relay-models",
  "reqwest",
  "rmcp",
@@ -3493,6 +3494,7 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "tracing",
+ "ts-rs",
 ]
 
 [[package]]

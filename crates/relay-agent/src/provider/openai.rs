@@ -115,17 +115,10 @@ impl OpenAiProvider {
     }
 }
 
-#[async_trait]
-impl ModelProvider for OpenAiProvider {
-    fn name(&self) -> &'static str {
-        self.label
-    }
-
-    fn default_model(&self) -> &'static str {
-        DEFAULT_MODEL
-    }
-
-    async fn complete(&self, request: CompletionRequest<'_>) -> AgentResult<CompletionResponse> {
+impl OpenAiProvider {
+    /// The request body, shared by the streaming and plain paths, so
+    /// the two cannot come to send different things.
+    fn body_for(&self, request: &CompletionRequest<'_>) -> Value {
         let mut messages = vec![json!({ "role": "system", "content": request.system })];
         messages.extend(Self::encode_messages(request.messages));
 
@@ -154,10 +147,15 @@ impl ModelProvider for OpenAiProvider {
             );
         }
 
+        body
+    }
+
+    /// Sends a built body and checks the status.
+    async fn send(&self, body: &Value) -> AgentResult<reqwest::Response> {
         let mut outgoing = self
             .client
             .post(format!("{}/chat/completions", self.base_url))
-            .json(&body);
+            .json(body);
 
         // A local endpoint usually wants no key, and sending an empty
         // bearer token makes some of them refuse outright.
@@ -171,29 +169,47 @@ impl ModelProvider for OpenAiProvider {
         })?;
 
         let status = response.status();
-        if !status.is_success() {
-            let retry_after = response
-                .headers()
-                .get("retry-after")
-                .and_then(|v| v.to_str().ok())
-                .and_then(|v| v.parse().ok());
-            let detail = response.text().await.unwrap_or_default();
-
-            return Err(match status.as_u16() {
-                401 | 403 => AgentError::BadApiKey {
-                    provider: self.label.into(),
-                },
-                429 => AgentError::RateLimited {
-                    provider: self.label.into(),
-                    retry_after,
-                },
-                other => AgentError::Provider {
-                    provider: self.label.into(),
-                    status: other,
-                    detail,
-                },
-            });
+        if status.is_success() {
+            return Ok(response);
         }
+
+        let retry_after = response
+            .headers()
+            .get("retry-after")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse().ok());
+        let detail = response.text().await.unwrap_or_default();
+
+        Err(match status.as_u16() {
+            401 | 403 => AgentError::BadApiKey {
+                provider: self.label.into(),
+            },
+            429 => AgentError::RateLimited {
+                provider: self.label.into(),
+                retry_after,
+            },
+            other => AgentError::Provider {
+                provider: self.label.into(),
+                status: other,
+                detail,
+            },
+        })
+    }
+}
+
+#[async_trait]
+impl ModelProvider for OpenAiProvider {
+    fn name(&self) -> &'static str {
+        self.label
+    }
+
+    fn default_model(&self) -> &'static str {
+        DEFAULT_MODEL
+    }
+
+    async fn complete(&self, request: CompletionRequest<'_>) -> AgentResult<CompletionResponse> {
+        let response = self.send(&self.body_for(&request)).await?;
+        let status = response.status();
 
         let body: Value = response.json().await.map_err(|e| AgentError::Provider {
             provider: self.label.into(),
@@ -241,6 +257,31 @@ impl ModelProvider for OpenAiProvider {
             input_tokens: body["usage"]["prompt_tokens"].as_u64().unwrap_or(0) as u32,
             output_tokens: body["usage"]["completion_tokens"].as_u64().unwrap_or(0) as u32,
         })
+    }
+
+    async fn complete_streaming(
+        &self,
+        request: CompletionRequest<'_>,
+        on_delta: super::OnDelta<'_>,
+    ) -> AgentResult<CompletionResponse> {
+        let mut body = self.body_for(&request);
+        body["stream"] = Value::Bool(true);
+        // Not sent during a stream unless asked for, and without it
+        // every streamed turn would report costing nothing.
+        body["stream_options"] = json!({ "include_usage": true });
+
+        let response = self.send(&body).await?;
+        let mut accumulator = super::stream::OpenAiAccumulator::new();
+
+        super::stream::read_events(self.label, response, |_event, data| {
+            if let Some(fragment) = accumulator.push(data) {
+                on_delta(&fragment);
+            }
+            Ok(())
+        })
+        .await?;
+
+        Ok(accumulator.finish())
     }
 }
 

@@ -124,18 +124,12 @@ export interface Conversation {
   updatedAt: number
 }
 
-/** A call the assistant asked for. */
-export interface ToolCall {
-  id: string
-  name: string
-  input: unknown
-}
-
-/** What a tool produced. */
-export interface ToolResult {
-  callId: string
-  outcome: { content: string, isError: boolean }
-}
+// Generated from Rust. Re-exported rather than redeclared: the
+// hand-written copies that used to live here drifted, and a drift
+// check that compares the generated files against Rust cannot see a
+// third copy somebody typed.
+export type { AssistantEvent, ToolCall, ToolResult, ToolRisk } from '@relay/shared-types'
+import type { AssistantEvent, ToolCall, ToolResult } from '@relay/shared-types'
 
 /** One stored message. */
 export interface StoredMessage {
@@ -148,16 +142,6 @@ export interface StoredMessage {
   position: number
   createdAt: number
 }
-
-/** How much a tool can cost you if the model is wrong. */
-export type ToolRisk = 'read' | 'write' | 'destructive' | 'send'
-
-/** Progress while a turn runs. */
-export type AssistantEvent =
-  | { type: 'said', text: string }
-  | { type: 'running', call: ToolCall }
-  | { type: 'ran', result: ToolResult }
-  | { type: 'asking', call: ToolCall, risk: ToolRisk }
 
 /** An exchange together with whatever its tests reported. */
 export interface SendOutcome {

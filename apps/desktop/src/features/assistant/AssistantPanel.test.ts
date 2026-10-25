@@ -174,6 +174,107 @@ describe('AssistantPanel', () => {
     expect(wrapper.text()).toContain('Relay ships no key')
   })
 
+  describe('a streamed answer', () => {
+    it('grows as the fragments arrive', async () => {
+      const wrapper = await panel()
+      await askSomething(wrapper)
+
+      emit({ type: 'delta', text: 'Check' })
+      await flushPromises()
+      expect(wrapper.text()).toContain('Check')
+
+      emit({ type: 'delta', text: 'ing the' })
+      emit({ type: 'delta', text: ' endpoint.' })
+      await flushPromises()
+      expect(wrapper.text()).toContain('Checking the endpoint.')
+    })
+
+    it('shows one message, not one per fragment', async () => {
+      const wrapper = await panel()
+      await askSomething(wrapper)
+
+      emit({ type: 'delta', text: 'a' })
+      emit({ type: 'delta', text: 'b' })
+      emit({ type: 'delta', text: 'c' })
+      await flushPromises()
+
+      // Three paragraphs reading "a", "b", "c" would also contain
+      // "abc" in `text()`, so count the elements.
+      const said = wrapper.findAll('p.whitespace-pre-wrap')
+      expect(said).toHaveLength(1)
+      expect(said[0]!.text()).toBe('abc')
+    })
+
+    it('the complete message replaces the fragments rather than repeating them', async () => {
+      // `said` is what gets persisted. If it appended instead, the
+      // panel would show the answer twice and disagree with history.
+      const wrapper = await panel()
+      await askSomething(wrapper)
+
+      emit({ type: 'delta', text: 'Half' })
+      emit({ type: 'said', text: 'Half a sentence.' })
+      await flushPromises()
+
+      const said = wrapper.findAll('p.whitespace-pre-wrap')
+      expect(said).toHaveLength(1)
+      expect(said[0]!.text()).toBe('Half a sentence.')
+    })
+
+    it('a message with no fragments before it still appears', async () => {
+      // A provider with no streaming path sends `said` alone.
+      const wrapper = await panel()
+      await askSomething(wrapper)
+
+      emit({ type: 'said', text: 'All at once.' })
+      await flushPromises()
+
+      expect(wrapper.text()).toContain('All at once.')
+    })
+
+    it('a second message starts a new paragraph', async () => {
+      // Two model turns around a tool call. Appending the second to
+      // the first would run them together.
+      const wrapper = await panel()
+      await askSomething(wrapper)
+
+      emit({ type: 'delta', text: 'Looking.' })
+      emit({ type: 'said', text: 'Looking.' })
+      emit({ type: 'delta', text: 'Found it.' })
+      await flushPromises()
+
+      const said = wrapper.findAll('p.whitespace-pre-wrap')
+      expect(said.map((p) => p.text())).toEqual(['Looking.', 'Found it.'])
+    })
+
+    it('drops the spinner while the text is doing the talking', async () => {
+      const wrapper = await panel()
+      await askSomething(wrapper)
+      expect(wrapper.text()).toContain('Working…')
+
+      emit({ type: 'delta', text: 'Here goes' })
+      await flushPromises()
+      expect(wrapper.text()).not.toContain('Working…')
+
+      // And it comes back between messages, when there is nothing to read.
+      emit({ type: 'said', text: 'Here goes' })
+      await flushPromises()
+      expect(wrapper.text()).toContain('Working…')
+    })
+
+    it('shows a cursor only on the message still being written', async () => {
+      const wrapper = await panel()
+      await askSomething(wrapper)
+
+      emit({ type: 'delta', text: 'typing' })
+      await flushPromises()
+      expect(wrapper.findAll('.caret')).toHaveLength(1)
+
+      emit({ type: 'said', text: 'typing' })
+      await flushPromises()
+      expect(wrapper.findAll('.caret')).toHaveLength(0)
+    })
+  })
+
   it('starting over clears the transcript', async () => {
     const wrapper = await panel()
     await askSomething(wrapper)

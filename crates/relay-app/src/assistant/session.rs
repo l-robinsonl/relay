@@ -15,13 +15,25 @@ use relay_agent::tool::{ToolCall, ToolResult, ToolRisk};
 use tokio::sync::oneshot;
 
 /// Something the interface should show while a turn runs.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, ts_rs::TS)]
 #[serde(tag = "type", rename_all = "camelCase")]
+#[ts(export)]
 pub enum AssistantEvent {
-    /// The model said something.
+    /// A fragment of the answer, as it is written.
+    ///
+    /// Many arrive per message. The interface appends them to the
+    /// message being written; the `Said` that follows carries the
+    /// whole thing and is what gets persisted, so a window that
+    /// joined late still ends up with the complete text.
+    #[serde(rename_all = "camelCase")]
+    Delta {
+        /// The fragment.
+        text: String,
+    },
+    /// The model finished a message.
     #[serde(rename_all = "camelCase")]
     Said {
-        /// What it said.
+        /// What it said, complete.
         text: String,
     },
     /// A tool is about to run.
@@ -179,6 +191,11 @@ impl Forwarding {
 }
 
 impl Progress for Forwarding {
+    fn delta(&self, text: &str) {
+        self.events.emit(AssistantEvent::Delta {
+            text: text.to_string(),
+        });
+    }
     fn said(&self, text: &str) {
         self.events.emit(AssistantEvent::Said {
             text: text.to_string(),

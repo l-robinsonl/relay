@@ -65,17 +65,13 @@ impl AnthropicProvider {
     }
 }
 
-#[async_trait]
-impl ModelProvider for AnthropicProvider {
-    fn name(&self) -> &'static str {
-        "Anthropic"
-    }
-
-    fn default_model(&self) -> &'static str {
-        DEFAULT_MODEL
-    }
-
-    async fn complete(&self, request: CompletionRequest<'_>) -> AgentResult<CompletionResponse> {
+impl AnthropicProvider {
+    /// The request body, shared by the streaming and plain paths.
+    ///
+    /// Separate so the two cannot drift: a cache breakpoint or a
+    /// thinking setting present on one and not the other would change
+    /// what the model does depending on which path ran.
+    fn body_for(&self, request: &CompletionRequest<'_>) -> Value {
         let tools: Vec<Value> = request
             .tools
             .iter()
@@ -113,12 +109,17 @@ impl ModelProvider for AnthropicProvider {
             body["tools"] = Value::Array(tools);
         }
 
+        body
+    }
+
+    /// Sends a built body and checks the status.
+    async fn send(&self, body: &Value) -> AgentResult<reqwest::Response> {
         let response = self
             .client
             .post(format!("{}/v1/messages", self.base_url))
             .header("x-api-key", &self.api_key)
             .header("anthropic-version", API_VERSION)
-            .json(&body)
+            .json(body)
             .send()
             .await
             .map_err(|e| AgentError::Transport {
@@ -127,29 +128,47 @@ impl ModelProvider for AnthropicProvider {
             })?;
 
         let status = response.status();
-        if !status.is_success() {
-            let retry_after = response
-                .headers()
-                .get("retry-after")
-                .and_then(|v| v.to_str().ok())
-                .and_then(|v| v.parse().ok());
-            let detail = response.text().await.unwrap_or_default();
-
-            return Err(match status.as_u16() {
-                401 | 403 => AgentError::BadApiKey {
-                    provider: "Anthropic".into(),
-                },
-                429 => AgentError::RateLimited {
-                    provider: "Anthropic".into(),
-                    retry_after,
-                },
-                other => AgentError::Provider {
-                    provider: "Anthropic".into(),
-                    status: other,
-                    detail,
-                },
-            });
+        if status.is_success() {
+            return Ok(response);
         }
+
+        let retry_after = response
+            .headers()
+            .get("retry-after")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse().ok());
+        let detail = response.text().await.unwrap_or_default();
+
+        Err(match status.as_u16() {
+            401 | 403 => AgentError::BadApiKey {
+                provider: "Anthropic".into(),
+            },
+            429 => AgentError::RateLimited {
+                provider: "Anthropic".into(),
+                retry_after,
+            },
+            other => AgentError::Provider {
+                provider: "Anthropic".into(),
+                status: other,
+                detail,
+            },
+        })
+    }
+}
+
+#[async_trait]
+impl ModelProvider for AnthropicProvider {
+    fn name(&self) -> &'static str {
+        "Anthropic"
+    }
+
+    fn default_model(&self) -> &'static str {
+        DEFAULT_MODEL
+    }
+
+    async fn complete(&self, request: CompletionRequest<'_>) -> AgentResult<CompletionResponse> {
+        let response = self.send(&self.body_for(&request)).await?;
+        let status = response.status();
 
         let body: Value = response.json().await.map_err(|e| AgentError::Provider {
             provider: "Anthropic".into(),
@@ -177,15 +196,34 @@ impl ModelProvider for AnthropicProvider {
         Ok(CompletionResponse {
             text,
             tool_calls,
-            stop_reason: match body["stop_reason"].as_str() {
-                Some("tool_use") => StopReason::ToolUse,
-                Some("max_tokens") => StopReason::MaxTokens,
-                Some("refusal") => StopReason::Refused,
-                _ => StopReason::Done,
-            },
+            stop_reason: body["stop_reason"]
+                .as_str()
+                .map_or(StopReason::Done, super::stream::stop_reason),
             input_tokens: body["usage"]["input_tokens"].as_u64().unwrap_or(0) as u32,
             output_tokens: body["usage"]["output_tokens"].as_u64().unwrap_or(0) as u32,
         })
+    }
+
+    async fn complete_streaming(
+        &self,
+        request: CompletionRequest<'_>,
+        on_delta: super::OnDelta<'_>,
+    ) -> AgentResult<CompletionResponse> {
+        let mut body = self.body_for(&request);
+        body["stream"] = Value::Bool(true);
+
+        let response = self.send(&body).await?;
+        let mut accumulator = super::stream::AnthropicAccumulator::new();
+
+        super::stream::read_events("Anthropic", response, |event, data| {
+            if let Some(fragment) = accumulator.push(event, data) {
+                on_delta(&fragment);
+            }
+            Ok(())
+        })
+        .await?;
+
+        Ok(accumulator.finish())
     }
 }
 

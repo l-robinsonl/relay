@@ -13,6 +13,7 @@ use crate::tool::{Tool, ToolCall};
 mod anthropic;
 mod openai;
 mod relay;
+mod stream;
 
 pub use anthropic::AnthropicProvider;
 pub use openai::OpenAiProvider;
@@ -78,10 +79,15 @@ impl Message {
 }
 
 /// Why the model stopped.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum StopReason {
     /// It finished its answer.
+    ///
+    /// The default, because a stream that ended without saying why
+    /// ended normally — a provider announces `tool_use` and
+    /// `max_tokens`, so their absence means neither.
+    #[default]
     Done,
     /// It wants tools run before it can continue.
     ToolUse,
@@ -139,6 +145,14 @@ pub struct CompletionResponse {
     pub output_tokens: u32,
 }
 
+/// Where the text goes as it is generated.
+///
+/// Called with each fragment, in order, on the task doing the
+/// request. Concatenating every fragment gives exactly the `text` of
+/// the [`CompletionResponse`] that follows — so a caller may use one
+/// or the other and never both.
+pub type OnDelta<'a> = &'a (dyn Fn(&str) + Send + Sync);
+
 /// Somewhere to send a conversation.
 #[async_trait]
 pub trait ModelProvider: Send + Sync + 'static {
@@ -150,4 +164,22 @@ pub trait ModelProvider: Send + Sync + 'static {
 
     /// Runs one turn.
     async fn complete(&self, request: CompletionRequest<'_>) -> AgentResult<CompletionResponse>;
+
+    /// Runs one turn, reporting the answer as it is written.
+    ///
+    /// The default waits for the whole reply and hands it over in one
+    /// piece, which is correct — it is simply not streaming. Every
+    /// provider Relay ships overrides it; the default is here so a
+    /// stub in a test does not have to.
+    async fn complete_streaming(
+        &self,
+        request: CompletionRequest<'_>,
+        on_delta: OnDelta<'_>,
+    ) -> AgentResult<CompletionResponse> {
+        let response = self.complete(request).await?;
+        if !response.text.is_empty() {
+            on_delta(&response.text);
+        }
+        Ok(response)
+    }
 }

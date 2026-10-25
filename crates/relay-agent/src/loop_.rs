@@ -47,7 +47,13 @@ impl Approver for ApproveEverything {
 /// Reports progress as the loop runs, so the interface is not a
 /// spinner for two minutes.
 pub trait Progress: Send + Sync + 'static {
-    /// The model said something.
+    /// A fragment of the answer, as it is written.
+    ///
+    /// Called many times per message. Every fragment concatenated is
+    /// exactly the text that `said` is later called with, so an
+    /// implementation uses one or the other and never both.
+    fn delta(&self, _text: &str) {}
+    /// The model said something, complete.
     fn said(&self, _text: &str) {}
     /// A tool is about to run.
     fn running(&self, _call: &ToolCall) {}
@@ -169,15 +175,19 @@ impl Agent {
         for _ in 0..MAX_STEPS {
             turn.steps += 1;
 
+            let progress = self.progress.clone();
             let response = self
                 .provider
-                .complete(CompletionRequest {
-                    model: &self.model,
-                    system: &self.system,
-                    messages: &conversation,
-                    tools: &tools,
-                    max_tokens: self.max_tokens,
-                })
+                .complete_streaming(
+                    CompletionRequest {
+                        model: &self.model,
+                        system: &self.system,
+                        messages: &conversation,
+                        tools: &tools,
+                        max_tokens: self.max_tokens,
+                    },
+                    &move |fragment| progress.delta(fragment),
+                )
                 .await?;
 
             turn.input_tokens += response.input_tokens;

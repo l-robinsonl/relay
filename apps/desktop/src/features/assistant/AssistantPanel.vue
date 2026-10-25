@@ -20,7 +20,7 @@ const workspace = useWorkspaceStore()
 
 /** One thing in the transcript. */
 type Entry =
-  | { kind: 'said', role: 'user' | 'assistant', text: string }
+  | { kind: 'said', role: 'user' | 'assistant', text: string, streaming?: boolean }
   | { kind: 'tool', call: ToolCall, result: ToolResult | null, asking: ToolRisk | null }
 
 const entries = ref<Entry[]>([])
@@ -67,6 +67,17 @@ watch(
 let unlisten: UnlistenFn | null = null
 
 const canSend = computed(() => question.value.trim() !== '' && !thinking.value)
+
+/**
+ * Whether an answer is arriving right now.
+ *
+ * "Working…" underneath a message that is visibly being written says
+ * nothing, so it gives way while the text itself is the progress.
+ */
+const writing = computed(() => {
+  const last = entries.value[entries.value.length - 1]
+  return last?.kind === 'said' && last.streaming === true
+})
 /** True while the assistant is waiting on an answer from the person. */
 const waiting = computed(() => entries.value.some((e) => e.kind === 'tool' && e.asking))
 
@@ -88,9 +99,35 @@ async function scrollDown () {
 /** Applies one event from the running turn. */
 function apply (event: AssistantEvent) {
   switch (event.type) {
-    case 'said':
-      entries.value.push({ kind: 'said', role: 'assistant', text: event.text })
+    case 'delta': {
+      // Appended to the message being written, or starting one. The
+      // fragments are only ever shown: `said` below carries the whole
+      // message and overwrites this, so a dropped or duplicated
+      // fragment cannot leave the panel disagreeing with what was
+      // saved.
+      const last = entries.value[entries.value.length - 1]
+      if (last?.kind === 'said' && last.streaming) {
+        last.text += event.text
+      } else {
+        entries.value.push({
+          kind: 'said',
+          role: 'assistant',
+          text: event.text,
+          streaming: true,
+        })
+      }
       break
+    }
+    case 'said': {
+      const last = entries.value[entries.value.length - 1]
+      if (last?.kind === 'said' && last.streaming) {
+        last.text = event.text
+        last.streaming = false
+      } else {
+        entries.value.push({ kind: 'said', role: 'assistant', text: event.text })
+      }
+      break
+    }
     case 'asking':
       entries.value.push({
         kind: 'tool',
@@ -250,7 +287,12 @@ defineExpose({ hydrate, startOver })
           >
             {{ entry.text }}
           </p>
-          <p v-else class="whitespace-pre-wrap text-secondary">{{ entry.text }}</p>
+          <p v-else class="whitespace-pre-wrap text-secondary">{{ entry.text
+            }}<span
+              v-if="entry.streaming"
+              class="caret"
+              aria-hidden="true"
+            /></p>
         </div>
 
         <ToolCallRow
@@ -263,7 +305,10 @@ defineExpose({ hydrate, startOver })
         />
       </template>
 
-      <p v-if="thinking && !waiting" class="flex items-center gap-1.5 text-xs text-muted">
+      <p
+        v-if="thinking && !waiting && !writing"
+        class="flex items-center gap-1.5 text-xs text-muted"
+      >
         <Loader2 :size="12" class="animate-spin" />
         Working…
       </p>
