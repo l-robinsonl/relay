@@ -6,18 +6,16 @@
 A local-first API client. It starts instantly, works entirely offline, and
 never asks you to create an account.
 
-Your workspaces, collections and requests live in a SQLite database on your own
+Your workspaces, collections and requests live in a SQLite file on your own
 machine. If a team wants to share them, they can run one small server
 themselves — or pay us a small amount to run it for them. Nothing about the
-desktop application changes either way.
+desktop app changes either way.
 
-> **Status: Phases 1–4 complete.** The HTTP engine, local persistence,
-> variable resolution, import/export, the desktop interface, OAuth 2.0,
-> scripting, the self-hosted sync server and the client that talks to it
-> are built and tested — against SQLite and against PostgreSQL, on Linux,
-> macOS and Windows. The hosted service and billing are designed but not
-> yet implemented. See [the roadmap](#roadmap) for exactly what works
-> today.
+> **Status: everything below works and is tested**, on Linux, macOS and
+> Windows, against both SQLite and PostgreSQL. What is *not* done is
+> code-signing, which needs certificates rather than code. Relay Cloud is
+> running but has had no real users yet. [What does not work
+> yet](#what-does-not-work-yet) is the honest list.
 
 ## Why
 
@@ -31,29 +29,33 @@ Relay is built the other way round:
 - **No account, ever, for local use.** There is no sign-in screen.
 - **Local-first.** The local database is authoritative. Nothing waits on a
   network round trip to show you your own data.
-- **Real HTTP.** Requests execute in Rust through `reqwest`, not in a webview's
-  `fetch`. That is what makes arbitrary methods, cookie control, client
+- **Real HTTP.** Requests run in Rust through `reqwest`, not in a webview's
+  `fetch`. That's what makes arbitrary methods, cookie control, client
   certificates, streaming bodies, real cancellation and honest timings
   possible.
-- **Secrets stay put.** Values marked secret are never written to the database,
-  never exported, and never synchronised — by construction, not by filter.
-- **No telemetry.** None. There is no analytics code to disable.
+- **Secrets stay put.** Values marked secret are never written to the
+  database, never exported and never synced. That's how they're built, not
+  a filter applied afterwards.
+- **No telemetry.** None. There's no analytics code to turn off.
 
-Being small is a consequence of those choices rather than the point of
-them — Relay uses the webview your system already has instead of shipping
-a Chromium, which on one machine measured 221 MB resident against
+Being small is a side effect of those choices rather than the point of
+them. Relay uses the webview your system already has instead of shipping a
+copy of Chromium, which on one machine measured 221 MB in use against
 Postman's 1,067 MB, and 7.3 MB to download against 199 MB. Pleasant, but
-not the reason to switch. [The numbers and their caveats](docs/FOOTPRINT.md).
+not the reason to switch. [The numbers and their
+caveats](docs/FOOTPRINT.md).
 
 ## Install
 
-No binaries are published yet, but `npm run tauri build` produces real
-installers — `.deb`, `.rpm` and `.AppImage` on Linux, `.msi`/`.exe` on
-Windows, `.dmg` on macOS. See [docs/RELEASING.md](docs/RELEASING.md).
+Tagged releases publish installers for all three platforms — `.deb`,
+`.rpm` and `.AppImage` on Linux, `.msi` and `.exe` on Windows, `.dmg` on
+macOS. You can also build them yourself with `npm run tauri build`; they
+land in `target/release/bundle`. See
+[docs/RELEASING.md](docs/RELEASING.md).
 
-Nothing is code-signed yet, so Windows SmartScreen will warn and macOS
-Gatekeeper will refuse outright. That is stated plainly rather than left
-for you to discover at the dialog.
+Nothing is code-signed yet, so Windows SmartScreen will warn you and macOS
+Gatekeeper will refuse outright. Saying so here beats letting you find out
+at the dialog.
 
 To run it from source, see [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 
@@ -74,6 +76,23 @@ certificates scoped to the hosts you name, a shared cookie jar, and automatic
 gzip/brotli/deflate/zstd decoding. Real
 cancellation that closes the connection. Responses are bounded and spool to
 disk instead of filling memory.
+
+**Other protocols** — GraphQL, with a button that fetches the schema from
+the endpoint. gRPC, where Relay asks the server which methods it has and
+fills in the message shape for you, with no `.proto` file to supply and no
+code generation. Websockets and server-sent events, picked from the same
+dropdown as GET and POST, opening a live transcript you can type into. A
+connection keeps the URL, headers, variables and authentication the
+request already had.
+
+**An assistant** — ask it to find a request, write a test, or point a
+collection at staging. Bring your own key for Claude, OpenAI or anything
+that speaks the same protocol, including Ollama and LM Studio running on
+your own machine; its answer types out as it is written. It cannot read a
+secret variable's value, credential-shaped headers come back redacted, and
+it asks before sending a request or deleting anything. Point it at an MCP
+server you run and those tools appear beside Relay's own. Conversations
+are stored in the same local file as everything else.
 
 **Workspaces** — unlimited local workspaces, nested collections and folders,
 saved requests, duplication, moving and reordering. Deletion is a tombstone, so
@@ -134,7 +153,14 @@ the strength of a timestamp. Secret values never leave your device.
 
 Stated plainly, because a README that implies otherwise wastes your time:
 
-- **Relay Cloud and billing.** Designed, not built.
+- **Code signing.** Nothing is signed, so macOS Gatekeeper refuses the
+  download outright and Windows SmartScreen warns. This needs certificates
+  bought rather than code written.
+- **Streaming gRPC.** Unary calls work. Server-streaming, client-streaming
+  and bidirectional methods are listed but greyed out, rather than offered
+  and then failing when you press send.
+- **MCP over HTTP.** The assistant reaches MCP servers over stdio, which is
+  how most of them run locally. The HTTP transport is not wired up.
 - **Encrypted client-certificate keys.** `rustls` cannot ask for a
   passphrase, so the key in the PEM has to be decrypted first. Relay says
   so, and says how.
@@ -151,9 +177,10 @@ Stated plainly, because a README that implies otherwise wastes your time:
 | 2 | Collections, environments, interpolation, auth, history, import/export | **Done** |
 | 3 | Self-hosted Axum sync server, users, revisions, WebSockets, conflicts | **Done** |
 | 4 | OAuth 2.0, scripting, OpenAPI import, certificates | **Done** |
-| 5 | Installers, signing, CI, benchmarks, security review | In progress — installers build, signing and CI unrun |
-| 6 | Relay Cloud on Neon Postgres, multitenant, RLS | Designed |
-| 7 | Stripe billing, per-seat annual subscriptions, entitlements | Designed |
+| 5 | Installers, CI on three platforms, benchmarks | **Done** — except signing, which needs certificates |
+| 6 | Accounts, invitations, members, the assistant | **Done** |
+| 7 | Stripe billing, per-seat subscriptions, entitlements | **Done** — proven against real Stripe events |
+| 8 | GraphQL, websockets, server-sent events, gRPC | **Done** |
 
 ## Hosting
 
@@ -163,12 +190,14 @@ Three modes, one protocol, no lock-in:
 |---|---|---|---|
 | **Local-only** | Your disk | None | Free |
 | **Self-hosted** | Your server | Yours, self-administered | Free |
-| **Relay Cloud** | Managed | Relay Cloud | £1/seat/month, annual |
+| **Relay Cloud** | Managed | Relay Cloud | Free for one person, then £2/person/month |
 
-The paid tier buys somebody else running the server. It buys no features.
-Export is never an entitlement: it keeps working when a subscription lapses,
-because holding your own API collections hostage over £12 a year would be
-indefensible.
+The paid tier buys somebody else running the server. It buys no features,
+and one person is free on it forever.
+
+If a payment fails, syncing, reading and exporting all carry on. The only
+thing that stops is adding another person. Holding your own API
+collections hostage over a card that expired would be indefensible.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full design.
 

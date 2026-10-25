@@ -37,6 +37,12 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
+      # Paths are relative to the workspace root, not to src-tauri.
+      # Cargo puts a workspace's output in one shared `target/`, and
+      # the first version of this looked under
+      # `apps/desktop/src-tauri/target/` — so every platform built
+      # its installers and then uploaded nothing, and the tag
+      # produced no release at all.
       matrix:
         include:
           - os: ubuntu-latest
@@ -44,18 +50,18 @@ jobs:
             # .deb for Debian and Ubuntu, .rpm for Fedora, AppImage
             # for everyone else.
             artifacts: |
-              apps/desktop/src-tauri/target/release/bundle/deb/*.deb
-              apps/desktop/src-tauri/target/release/bundle/rpm/*.rpm
-              apps/desktop/src-tauri/target/release/bundle/appimage/*.AppImage
+              target/release/bundle/deb/*.deb
+              target/release/bundle/rpm/*.rpm
+              target/release/bundle/appimage/*.AppImage
           - os: macos-latest
             name: macOS
             artifacts: |
-              apps/desktop/src-tauri/target/release/bundle/dmg/*.dmg
+              target/release/bundle/dmg/*.dmg
           - os: windows-latest
             name: Windows
             artifacts: |
-              apps/desktop/src-tauri/target/release/bundle/msi/*.msi
-              apps/desktop/src-tauri/target/release/bundle/nsis/*.exe
+              target/release/bundle/msi/*.msi
+              target/release/bundle/nsis/*.exe
 
     steps:
       - uses: actions/checkout@v5

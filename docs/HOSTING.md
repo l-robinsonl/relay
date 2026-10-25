@@ -275,17 +275,50 @@ variables unset and there is no seat limit, no subscription, and the
 app shows no billing anywhere — not a disabled panel, nothing. The
 three `/billing` routes answer that this server does not charge.
 
-Charging needs all three of:
+Charging needs a key, a webhook secret and at least one price:
 
 | | |
 |---|---|
 | `STRIPE_SECRET_KEY` | `sk_test_…` or `sk_live_…` |
 | `STRIPE_WEBHOOK_SECRET` | `whsec_…`, shown when the endpoint is created |
-| `STRIPE_PRICE_SEAT_ANNUAL` | `price_…`, a recurring per-unit price |
+| `STRIPE_PRICE_SYNC_ANNUAL` | `price_…`, a recurring per-unit price |
+| `STRIPE_PRICE_SYNC_MONTHLY` | the same, billed monthly |
+| `STRIPE_PRICE_ASSISTANT_ANNUAL` | sync plus the hosted assistant |
+| `STRIPE_PRICE_ASSISTANT_MONTHLY` | the same, billed monthly |
 
-All three or none. A key without a webhook secret would take payments
-and never hear that they succeeded, so the server treats a partial
-configuration as off and logs that seats will not be charged.
+Set as many of the four prices as you want to sell. The app offers
+exactly those and no others, cheapest first, and refuses a plan it has
+no price for rather than quietly substituting another.
+`STRIPE_PRICE_SEAT_ANNUAL` is the old name for
+`STRIPE_PRICE_SYNC_ANNUAL` and still works.
+
+A key without a webhook secret would take payments and never hear that
+they succeeded, so the server treats a partial configuration as off and
+logs that seats will not be charged.
+
+The amounts people see in the app are read from Stripe, not configured
+here. Change a price in Stripe and Relay follows; there is no figure in
+this file that could disagree with what the card is charged.
+
+### The hosted assistant
+
+Optional, and separate from seats. Set `RELAY_ASSISTANT_KEY` to a
+provider key and at least one assistant price, and subscribers on that
+plan can use the assistant without finding a key of their own. Leave
+the key unset and the assistant still works for everybody — on their
+own key, unmetered, which is what it does on a self-hosted server.
+
+| | |
+|---|---|
+| `RELAY_ASSISTANT_KEY` | the provider key the server spends on a subscriber's behalf |
+| `RELAY_ASSISTANT_MODEL` | defaults to `claude-haiku-5-5` |
+| `RELAY_ASSISTANT_TURNS` | messages included per person per month, default 1000 |
+| `RELAY_ASSISTANT_BASE_URL` | for a gateway in front of the provider's API |
+
+A "turn" is one round trip to the model, counted from the moment it
+starts producing. A question that sends the assistant off to use tools
+spends one per step, so the default is a few hundred questions rather
+than a thousand.
 
 Register the endpoint in Stripe as `/v1/billing/webhook`, subscribed to
 `checkout.session.completed` and `customer.subscription.*`. Nothing

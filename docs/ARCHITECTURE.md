@@ -297,7 +297,7 @@ tells the user to enter it again.
 | **4** | OAuth 2.0, sandboxed scripting and assertions, OpenAPI import, advanced search, certificates, performance work | Done |
 | **5** | Installers, signing guidance, CI, migration/recovery tests, security review, benchmarks | — |
 | **6** | Relay Cloud: Neon Postgres behind the same `SyncStore` trait, shared multitenant schema, RLS, quotas | The hosted service speaks the identical `/v1` sync API; a workspace migrates between modes without export/import |
-| **7** | Stripe Checkout, per-seat annual subscriptions, entitlements, webhooks, billing portal | Seats are enforced server-side; a lapsed subscription still permits full data export |
+| **7** | Stripe Checkout, per-seat subscriptions, entitlements, webhooks, billing portal | Seats are enforced server-side; a lapsed subscription still syncs, reads and exports |
 
 Billing is deliberately last. It is the only part of the system whose absence
 costs a user nothing, and the only part whose premature arrival would shape the
@@ -313,7 +313,7 @@ changes is the storage driver and whether billing is compiled in.
 |---|---|---|---|---|
 | **Local-only** | On the user's disk | None | Free | Local SQLite (no server) |
 | **Self-hosted** | On the team's server | Server-local, self-administered | Free | SQLite (WAL) |
-| **Relay Cloud** | Managed, multitenant | Relay Cloud account | £1/seat/month, annual | Neon Postgres |
+| **Relay Cloud** | Managed, multitenant | Relay Cloud account | Free for one person, then £2/person/month | Neon Postgres |
 
 Three invariants hold across all of them:
 
@@ -321,9 +321,10 @@ Three invariants hold across all of them:
 2. **No functional lock-in.** The paid tier buys convenience — somebody else
    running the server — not features. A self-hoster gets the same protocol,
    the same client and the same capabilities.
-3. **Export always works.** Data export is not an entitlement. It remains
-   available when a subscription lapses, is cancelled or is in arrears, because
-   holding a user's own API collections hostage over £12 a year would be
+3. **Nothing is withheld over money.** Export, reading and syncing all keep
+   working when a subscription lapses, is cancelled or is in arrears. The
+   only thing a seat limit blocks is *adding another person*. Holding a
+   user's own API collections hostage over a card that expired would be
    indefensible.
 
 ### Persistence abstraction
@@ -410,9 +411,13 @@ the behaviour that makes it safe to share a Production environment at all.
 
 - **Stripe Checkout** for subscription creation, **Billing Portal** for
   self-service changes. Relay never handles card data and stores no PAN.
-- **Per-seat, billed annually.** Annual billing is the default because at
-  £1/seat/month the per-transaction fee on a monthly charge is a significant
-  fraction of the charge itself.
+- **Per-seat, monthly or annually, with or without the hosted assistant.**
+  Four prices, listed by `Config::plans()` and chosen at checkout. Annual is
+  cheaper per month, partly because at these amounts the per-transaction fee
+  on a monthly charge is a significant fraction of the charge itself. The
+  amounts shown in the client are read from Stripe rather than configured in
+  Relay, so the figure on the button cannot disagree with the figure on the
+  card.
 - **Entitlements are server-side.** A `subscriptions` row per tenant records
   plan, seat count, status and `current_period_end`. Seat enforcement happens
   when a membership is added, never in the client.
@@ -420,11 +425,13 @@ the behaviour that makes it safe to share a Production environment at all.
   `STRIPE_WEBHOOK_SECRET` and recorded by Stripe event id in a
   `processed_webhooks` table before it is acted on, so redelivery is a no-op.
   Stripe is the source of truth; the local row is a cache that reconciles.
-- **Failure is graceful.** Payment failure moves the tenant to `past_due` with
-  a grace period of 14 days during which sync continues read-write. After it,
-  the workspace becomes **read-only for sync** — the desktop client keeps
-  working entirely normally against its local database, and export stays
-  available indefinitely.
+- **Failure changes almost nothing.** Payment failure moves the tenant to
+  `past_due` and that is all: syncing, reading and exporting carry on
+  indefinitely, and nobody is evicted. The only consequence of being over
+  the seat limit or out of subscription is that *another person cannot be
+  added*. An earlier draft of this document described a grace period after
+  which sync went read-only; that was deliberately not built, because a
+  tool holding your API requests must not hold them hostage over a card.
 - **Seat changes** prorate through Stripe. Removing a seat below current
   membership count is refused with a clear message rather than silently
   evicting somebody.

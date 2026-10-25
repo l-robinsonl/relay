@@ -1,8 +1,18 @@
 # Hosting the assistant
 
-**Status: designed, not built.** Nothing in this document exists in the
-code yet. It is the plan for letting a subscriber use the assistant
-without supplying their own API key.
+**Status: built.** This was the plan for letting a subscriber use the
+assistant without supplying their own API key, and it is now how the
+code works. The proxy streams, and a turn is counted when the model
+starts producing rather than when the request is accepted, so an
+upstream that refuses costs nobody anything.
+
+Two details differ from the plan below. `RELAY_ASSISTANT_BASE_URL`
+points the proxy somewhere other than Anthropic, which exists both for
+an organisation with a gateway and because without it the proxy could
+only ever have been tested against the real API. And usage is recorded
+when the forwarding ends — whether the provider finished, the window
+closed, or the connection broke — because the provider charges for
+what it generated in every one of those cases.
 
 ## The decision this encodes
 
