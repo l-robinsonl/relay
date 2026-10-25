@@ -1,0 +1,52 @@
+[package]
+name = "relay-grpc"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+relay-models.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+futures-util.workspace = true
+bytes.workspace = true
+ts-rs.workspace = true
+
+# gRPC without code generation.
+#
+# Relay cannot compile a `.proto` at build time: the services it calls
+# belong to whoever is being tested, and are discovered at runtime
+# through server reflection. `prost-reflect` is what makes that
+# possible — a descriptor pool built at runtime and `DynamicMessage`
+# for values that have no Rust type — and tonic is what speaks the
+# wire protocol, including the trailers that carry `grpc-status`.
+tonic = { version = "0.14", default-features = false, features = [
+    "codegen",
+    "transport",
+    "tls-ring",
+    "tls-webpki-roots",
+    "channel",
+] }
+prost = "0.14"
+# The prost codec for the reflection service, whose message types are
+# fixed and known. The dynamic codec in `codec.rs` handles everything
+# belonging to the service being tested.
+tonic-prost = "0.14"
+prost-types = "0.14"
+http = "1"
+prost-reflect = { version = "0.16", features = ["serde"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full"] }
+# A gRPC server built by hand for the tests. tonic's own server would
+# pull `protoc` in through code generation, which nothing else here
+# needs and which would have to exist on every machine that builds
+# Relay.
+axum = "0.8"
+http-body-util = "0.1"
+hyper = "1"
+

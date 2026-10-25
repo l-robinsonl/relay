@@ -100,7 +100,7 @@ const sendShortcut = describeShortcut({ key: 'Enter', mod: true })
   <!-- A connection has no single response, so it gets the log
        instead of the status bar, tabs and body viewer below. -->
   <section
-    v-if="tab.doc.kind !== 'http'"
+    v-if="tab.doc.kind === 'sse' || tab.doc.kind === 'websocket'"
     class="flex h-full min-h-0 flex-col surface-base"
     aria-label="Stream"
   >

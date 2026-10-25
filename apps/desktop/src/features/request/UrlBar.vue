@@ -39,6 +39,7 @@ const METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS']
  * has no method at all.
  */
 const KINDS: { id: RequestKind; label: string }[] = [
+  { id: 'grpc', label: 'gRPC' },
   { id: 'sse', label: 'SSE' },
   { id: 'websocket', label: 'WS' },
 ]
@@ -63,8 +64,13 @@ function choose (value: string) {
   emit('update:method', value)
 }
 
-/** A connection is opened and closed, not sent and cancelled. */
-const streams = computed(() => props.kind !== 'http')
+/**
+ * A connection is opened and closed, not sent and cancelled.
+ *
+ * gRPC is in the same dropdown but is not one of these: a unary call
+ * answers once, like a request, so it keeps Send.
+ */
+const streams = computed(() => props.kind === 'sse' || props.kind === 'websocket')
 
 const customMethod = ref(false)
 const mirror = ref<HTMLDivElement | null>(null)
@@ -131,7 +137,7 @@ function syncScroll (event: Event) {
       >
         <option v-for="item in METHODS" :key="item" :value="item">{{ item }}</option>
         <option value="__custom__">Custom…</option>
-        <optgroup label="Streams">
+        <optgroup label="Protocols">
           <option v-for="item in KINDS" :key="item.id" :value="item.id">
             {{ item.label }}
           </option>

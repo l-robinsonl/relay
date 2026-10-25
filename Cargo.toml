@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "crates/relay-models",
+    "crates/relay-grpc",
     "crates/relay-http",
     "crates/relay-storage",
     "crates/relay-core",
@@ -26,6 +27,7 @@ authors = ["Relay contributors"]
 
 [workspace.dependencies]
 relay-models = { path = "crates/relay-models" }
+relay-grpc = { path = "crates/relay-grpc" }
 relay-http = { path = "crates/relay-http" }
 relay-storage = { path = "crates/relay-storage" }
 relay-core = { path = "crates/relay-core" }

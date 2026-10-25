@@ -482,6 +482,100 @@ impl RelayService {
         Ok(())
     }
 
+    /// Asks a gRPC server what it serves.
+    ///
+    ///
+    /// Resolved first, so `{{host}}` works the way it does
+    /// everywhere else. Nothing is cached: a server under
+    /// development changes its methods between runs, and a stale
+    /// list is worse than a slow one.
+    pub async fn grpc_schema(
+        &self,
+        doc: RequestDoc,
+        environment: Option<EnvironmentId>,
+    ) -> RelayResult<relay_grpc::GrpcSchema> {
+        let (_, schema) = self.grpc_connect(doc, environment).await?;
+        Ok(schema)
+    }
+
+    /// Calls a gRPC method, JSON in and JSON out.
+    ///
+    /// Reflects every time rather than holding a pool: a call is
+    /// rare compared with a keystroke, and a descriptor that went
+    /// stale while the window was open would fail in a way nobody
+    /// could explain.
+    pub async fn grpc_send(
+        &self,
+        doc: RequestDoc,
+        environment: Option<EnvironmentId>,
+    ) -> RelayResult<String> {
+        let (service, method) = split_grpc_method(&doc.grpc_method)?;
+
+        let context_data = self.load_scope(&doc, environment.clone()).await?;
+        let input = context_data.as_input();
+        let context = build_context(&input);
+        let spec = resolve(&doc, &input, &context).spec;
+
+        // The body is whatever the editor holds, interpolated like
+        // any other. A gRPC request is JSON here and protobuf on the
+        // wire; the descriptor does the translation.
+        let body = match &spec.body {
+            relay_models::RequestBody::Json { text }
+            | relay_models::RequestBody::Text { text } => text.clone(),
+            relay_models::RequestBody::None => String::new(),
+            other => {
+                return Err(RelayError::invalid(format!(
+                    "a gRPC request is sent as JSON; this one is {}",
+                    other.mode_name()
+                )));
+            }
+        };
+
+        // Headers become metadata. Authentication has already been
+        // applied to them by resolution, so a bearer token works
+        // exactly as it does for a request.
+        let metadata: Vec<(String, String)> = spec
+            .headers
+            .iter()
+            .filter(|h| h.is_active())
+            .map(|h| (h.key.clone(), h.value.clone()))
+            .collect();
+
+        let (client, _) = self.grpc_connect(doc, environment).await?;
+        client
+            .unary(
+                client.pool(),
+                &service,
+                &method,
+                &body,
+                &metadata,
+            )
+            .await
+            .map_err(|e| RelayError::invalid(e.to_string()))
+    }
+
+    /// Connects and reflects, which every gRPC operation needs first.
+    async fn grpc_connect(
+        &self,
+        doc: RequestDoc,
+        environment: Option<EnvironmentId>,
+    ) -> RelayResult<(GrpcSession, relay_grpc::GrpcSchema)> {
+        let context_data = self.load_scope(&doc, environment).await?;
+        let input = context_data.as_input();
+        let context = build_context(&input);
+        let spec = resolve(&doc, &input, &context).spec;
+
+        let client = relay_grpc::GrpcClient::connect(&spec.url)
+            .await
+            .map_err(|e| RelayError::invalid(e.to_string()))?;
+        let (pool, schema) = client
+            .reflect()
+            .await
+            .map_err(|e| RelayError::invalid(e.to_string()))?;
+
+        Ok((GrpcSession { client, pool }, schema))
+    }
+
     /// Sends a message on an open websocket.
     ///
     /// The frame is not logged here: it is logged by the connection
@@ -2268,3 +2362,82 @@ something destroys their work, so they are asked before either. If they decline,
 not try it again — ask what they would rather do.
 
 Be brief. Say what you did, not what you are about to do.";
+
+/// A connection together with the descriptors it discovered.
+///
+/// The two always travel together — a call needs both — and keeping
+/// them in one value stops a pool being used against a different
+/// server's connection.
+pub struct GrpcSession {
+    client: relay_grpc::GrpcClient,
+    pool: prost_reflect::DescriptorPool,
+}
+
+impl GrpcSession {
+    /// The descriptors this server reported.
+    pub fn pool(&self) -> &prost_reflect::DescriptorPool {
+        &self.pool
+    }
+}
+
+impl std::ops::Deref for GrpcSession {
+    type Target = relay_grpc::GrpcClient;
+
+    fn deref(&self) -> &Self::Target {
+        &self.client
+    }
+}
+
+/// Splits `package.Service/Method` into its two halves.
+fn split_grpc_method(raw: &str) -> RelayResult<(String, String)> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Err(RelayError::invalid(
+            "no gRPC method chosen — read the server's schema and pick one",
+        ));
+    }
+
+    // Also accepts a leading slash, because that is how the path is
+    // written and how somebody copying from a log will paste it.
+    let trimmed = raw.trim_start_matches('/');
+    match trimmed.rsplit_once('/') {
+        Some((service, method)) if !service.is_empty() && !method.is_empty() => {
+            Ok((service.to_string(), method.to_string()))
+        }
+        _ => Err(RelayError::invalid(format!(
+            "'{raw}' is not a gRPC method — it should read package.Service/Method"
+        ))),
+    }
+}
+
+#[cfg(test)]
+mod grpc_tests {
+    use super::split_grpc_method;
+
+    #[test]
+    fn a_method_path_splits_into_service_and_method() {
+        let (service, method) = split_grpc_method("relay.test.Echo/Say").unwrap();
+        assert_eq!(service, "relay.test.Echo");
+        assert_eq!(method, "Say");
+    }
+
+    #[test]
+    fn a_leading_slash_is_tolerated() {
+        // How the path is written, and how it comes out of a log.
+        let (service, method) = split_grpc_method("/relay.test.Echo/Say").unwrap();
+        assert_eq!(service, "relay.test.Echo");
+        assert_eq!(method, "Say");
+    }
+
+    #[test]
+    fn nothing_chosen_says_what_to_do_about_it() {
+        let error = split_grpc_method("  ").unwrap_err().to_string();
+        assert!(error.contains("schema"), "{error}");
+    }
+
+    #[test]
+    fn something_that_is_not_a_path_is_refused_with_the_shape_it_wanted() {
+        let error = split_grpc_method("Echo.Say").unwrap_err().to_string();
+        assert!(error.contains("package.Service/Method"), "{error}");
+    }
+}

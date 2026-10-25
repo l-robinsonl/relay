@@ -330,11 +330,16 @@ fn map_collection(row: &Row<'_>) -> rusqlite::Result<StorageResult<Collection>> 
 /// Reads and writes saved requests.
 pub struct RequestRepo;
 
+/// Appended to, never inserted into.
+///
+/// Every `row.get(n)` below counts along this list, so a column added
+/// in the middle silently shifts fifteen of them — which is a bug
+/// that compiles, and which this project has already paid for once.
 const REQUEST_COLUMNS: &str =
     "id, workspace_id, collection_id, name, description, kind, method, url,
      headers_json, query_params_json, path_params_json, body_json, auth_json,
      settings_json, scripts_json, tags_json, sort_order, created_at, updated_at,
-     rev, dirty, deleted_at";
+     rev, dirty, deleted_at, grpc_method";
 
 impl RequestRepo {
     /// One request by id.
@@ -374,8 +379,8 @@ impl RequestRepo {
                 (id, workspace_id, collection_id, name, description, kind, method, url,
                  headers_json, query_params_json, path_params_json, body_json, auth_json,
                  settings_json, scripts_json, tags_json, sort_order, created_at, updated_at,
-                 rev, dirty, deleted_at)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,1,?21)
+                 rev, dirty, deleted_at, grpc_method)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,1,?21,?22)
              ON CONFLICT(id) DO UPDATE SET
                 workspace_id      = excluded.workspace_id,
                 collection_id     = excluded.collection_id,
@@ -395,7 +400,8 @@ impl RequestRepo {
                 sort_order        = excluded.sort_order,
                 updated_at        = excluded.updated_at,
                 dirty             = 1,
-                deleted_at        = excluded.deleted_at",
+                deleted_at        = excluded.deleted_at,
+                grpc_method       = excluded.grpc_method",
             params![
                 doc.id.as_str(),
                 doc.workspace_id.as_str(),
@@ -418,6 +424,7 @@ impl RequestRepo {
                 doc.updated_at.as_millis(),
                 doc.revision.rev,
                 doc.revision.deleted_at.map(|t| t.as_millis()),
+                doc.grpc_method,
             ],
         )?;
         Ok(())
@@ -493,6 +500,8 @@ fn map_request(row: &Row<'_>) -> rusqlite::Result<StorageResult<RequestDoc>> {
             name: row.get(3)?,
             description: row.get(4)?,
             kind: RequestKind::parse(&row.get::<_, String>(5)?),
+            // Index 22: appended to `REQUEST_COLUMNS`, so nothing above moved.
+            grpc_method: row.get::<_, String>(22)?,
             method: HttpMethod::from(row.get::<_, String>(6)?),
             url: row.get(7)?,
             headers: decode_json("headers_json", &row.get::<_, String>(8)?)?,

@@ -892,6 +892,26 @@ pub async fn stream_open(
         .await
 }
 
+/// Asks a gRPC server what it serves.
+#[tauri::command]
+pub async fn grpc_schema(
+    service: State<'_, RelayService>,
+    doc: relay_models::RequestDoc,
+    environment: Option<relay_models::EnvironmentId>,
+) -> RelayResult<relay_grpc::GrpcSchema> {
+    service.grpc_schema(doc, environment).await
+}
+
+/// Calls a gRPC method. JSON in, JSON out.
+#[tauri::command]
+pub async fn grpc_send(
+    service: State<'_, RelayService>,
+    doc: relay_models::RequestDoc,
+    environment: Option<relay_models::EnvironmentId>,
+) -> RelayResult<String> {
+    service.grpc_send(doc, environment).await
+}
+
 /// Sends a message on an open websocket.
 #[tauri::command]
 pub fn stream_send(

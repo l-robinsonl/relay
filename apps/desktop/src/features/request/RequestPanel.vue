@@ -6,6 +6,7 @@ import AuthEditor from '@/features/request/AuthEditor.vue'
 import ScriptsEditor from '@/features/request/ScriptsEditor.vue'
 import BodyEditor from '@/features/request/BodyEditor.vue'
 import SettingsEditor from '@/features/request/SettingsEditor.vue'
+import GrpcMethods from '@/features/request/GrpcMethods.vue'
 import UrlBar from '@/features/request/UrlBar.vue'
 import KeyValueEditor from '@/components/ui/KeyValueEditor.vue'
 import { api } from '@/services/ipc'
@@ -19,14 +20,68 @@ const workspace = useWorkspaceStore()
 
 const unresolved = ref<string[]>([])
 
-const sections: { id: RequestSection; label: string; count?: () => number }[] = [
-  { id: 'params', label: 'Params', count: () => props.tab.doc.queryParams.length },
-  { id: 'headers', label: 'Headers', count: () => props.tab.doc.headers.length },
-  { id: 'body', label: 'Body' },
-  { id: 'auth', label: 'Auth' },
-  { id: 'scripts', label: 'Scripts' },
-  { id: 'settings', label: 'Settings' },
-]
+/**
+ * The sections, which depend on the protocol.
+ *
+ * gRPC has no query string and no verb, and its headers are
+ * metadata; offering Params would be offering something that does
+ * nothing. It gains Method, which is the first thing to choose and
+ * has nowhere else to live.
+ */
+const sections = computed<{ id: RequestSection; label: string; count?: () => number }[]>(() => {
+  const headers = {
+    id: 'headers' as const,
+    label: props.tab.doc.kind === 'grpc' ? 'Metadata' : 'Headers',
+    count: () => props.tab.doc.headers.length,
+  }
+
+  if (props.tab.doc.kind === 'grpc') {
+    return [
+      { id: 'method', label: 'Method' },
+      { id: 'body', label: 'Message' },
+      headers,
+      { id: 'auth', label: 'Auth' },
+      { id: 'settings', label: 'Settings' },
+    ]
+  }
+
+  return [
+    { id: 'params', label: 'Params', count: () => props.tab.doc.queryParams.length },
+    headers,
+    { id: 'body', label: 'Body' },
+    { id: 'auth', label: 'Auth' },
+    { id: 'scripts', label: 'Scripts' },
+    { id: 'settings', label: 'Settings' },
+  ]
+})
+
+// Switching protocol can take the open section away with it — from
+// Params to gRPC leaves a tab bar with nothing selected and an empty
+// pane below it.
+watch(sections, (available) => {
+  if (!available.some((s) => s.id === props.tab.activeSection)) {
+    tabs.setSection(props.tab.id, available[0]!.id)
+  }
+})
+
+/**
+ * Picks a gRPC method, and seeds the message with its shape.
+ *
+ * Only when the editor is empty: overwriting a message somebody
+ * wrote because they clicked the wrong method once would be worse
+ * than leaving them to fill it in.
+ */
+function chooseMethod (method: string, example: string) {
+  const empty =
+    props.tab.doc.body.mode === 'none' ||
+    !('text' in props.tab.doc.body) ||
+    props.tab.doc.body.text.trim() === ''
+
+  tabs.update(props.tab.id, {
+    grpcMethod: method,
+    ...(empty ? { body: { mode: 'json', text: example } } : {}),
+  })
+}
 
 const dirty = computed(() => tabs.isDirty(props.tab))
 const sending = computed(() => props.tab.executionId !== null)
@@ -148,8 +203,16 @@ watch(
 
     <!-- Section content -->
     <div class="min-h-0 flex-1 overflow-y-auto">
+      <GrpcMethods
+        v-if="tab.activeSection === 'method'"
+        :doc="tab.doc"
+        :environment="workspace.activeEnvironmentId"
+        :selected="tab.doc.grpcMethod ?? ''"
+        @choose="chooseMethod"
+      />
+
       <KeyValueEditor
-        v-if="tab.activeSection === 'params'"
+        v-else-if="tab.activeSection === 'params'"
         :model-value="tab.doc.queryParams"
         key-placeholder="Parameter"
         @update:model-value="tabs.update(tab.id, { queryParams: $event })"

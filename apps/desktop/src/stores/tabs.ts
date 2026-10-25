@@ -1,10 +1,10 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
-import type { HttpExchange, RequestDoc } from '@relay/shared-types'
+import type { HttpExchange, HttpResponseData, RequestDoc } from '@relay/shared-types'
 import type { RequestSection, ResponseTab, Tab, TabResult } from '@/types/ui'
 import type { ScriptOutcome } from '@/services/ipc'
 import type { StreamEvent } from '@relay/shared-types'
-import { api, onExecutionProgress, onStreamEvent } from '@/services/ipc'
+import { api, onExecutionProgress, onStreamEvent, toRelayError } from '@/services/ipc'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { useToastStore } from '@/stores/toast'
 
@@ -147,7 +147,13 @@ export const useTabsStore = defineStore('tabs', () => {
     // Changing the protocol while something is connected would strand
     // it: the stop button reads the kind to decide how to stop, so a
     // switch to GET leaves a live stream nothing can reach.
-    if (tab && patch.kind && patch.kind !== tab.doc.kind && tab.executionId) {
+    if (
+      tab &&
+      patch.kind &&
+      patch.kind !== tab.doc.kind &&
+      tab.executionId &&
+      tab.doc.kind !== 'grpc'
+    ) {
       void cancel(tabId)
     }
 
@@ -247,6 +253,72 @@ export const useTabsStore = defineStore('tabs', () => {
   }
 
   /**
+   * Calls a gRPC method and shows the answer where a response goes.
+   *
+   * Presented as a response rather than as a stream log: a unary call
+   * has one answer, and putting it anywhere else would mean two
+   * places to look for the same thing.
+   */
+  async function sendGrpc (tabId: string) {
+    const tab = tabs.value.find((t) => t.id === tabId)
+    if (!tab) return
+
+    const executionId = crypto.randomUUID()
+    patchTab(tabId, { executionId, result: null, tests: null, bytesRead: 0 })
+
+    const started = performance.now()
+    try {
+      const json = await api.grpcSend(tab.doc, workspace.activeEnvironmentId)
+      patchTab(tabId, {
+        result: {
+          kind: 'response',
+          response: grpcResponse(json, performance.now() - started),
+        },
+      })
+    } catch (error) {
+      // gRPC's own status is the useful part — `NotFound: no such
+      // customer`, not "the call failed" — and it arrives as the
+      // error's message.
+      const relay = toRelayError(error)
+      patchTab(tabId, {
+        result: {
+          kind: 'error',
+          error: { kind: 'other', message: relay.message, detail: relay.detail ?? null },
+          elapsedMs: performance.now() - started,
+        },
+      })
+    } finally {
+      patchTab(tabId, { executionId: null })
+    }
+  }
+
+  /**
+   * Dresses a gRPC answer as a response so one pane shows both.
+   *
+   * There is no status line on a successful gRPC call — `OK` is the
+   * absence of a `grpc-status` — so 200 stands in for it, and the
+   * body viewer does the rest.
+   */
+  function grpcResponse (json: string, elapsedMs: number): HttpResponseData {
+    const bytes = new TextEncoder().encode(json).length
+    return {
+      status: 200,
+      statusText: 'OK',
+      httpVersion: 'HTTP/2',
+      headers: [],
+      cookies: [],
+      body: { kind: 'text', text: json },
+      sizeBytes: bytes,
+      decodedSizeBytes: null,
+      timings: { totalMs: Math.round(elapsedMs) } as never,
+      redirects: [],
+      finalUrl: '',
+      contentType: 'application/json',
+      isText: true,
+    }
+  }
+
+  /**
    * Sends a message on the tab's open websocket.
    *
    * Nothing is added to the log here. The frame is logged by Rust
@@ -276,8 +348,15 @@ export const useTabsStore = defineStore('tabs', () => {
 
     // A connection is not a request: it has no single response, and
     // the same button opens and closes it.
-    if (tab.doc.kind !== 'http') {
+    if (tab.doc.kind === 'sse' || tab.doc.kind === 'websocket') {
       await toggleStream(tabId)
+      return
+    }
+
+    // gRPC answers once, like a request, but over a protocol the HTTP
+    // engine knows nothing about.
+    if (tab.doc.kind === 'grpc') {
+      await sendGrpc(tabId)
       return
     }
 
@@ -330,7 +409,7 @@ export const useTabsStore = defineStore('tabs', () => {
     if (!tab?.executionId) return
     // A stream is not cancelled, it is closed — and `http_cancel` has
     // never heard of it, so stopping one would silently do nothing.
-    if (tab.doc.kind !== 'http') {
+    if (tab.doc.kind === 'sse' || tab.doc.kind === 'websocket') {
       await api.streamClose(tab.executionId)
       return
     }
@@ -395,6 +474,7 @@ export const useTabsStore = defineStore('tabs', () => {
     toggleStream,
     watchStreams,
     applyStreamEvent,
+    sendGrpc,
     streamSend,
     clearStream,
     cancel,

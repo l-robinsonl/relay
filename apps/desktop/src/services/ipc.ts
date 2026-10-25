@@ -4,6 +4,7 @@ import type {
   Collection,
   Environment,
   ExecutionProgress,
+  GrpcSchema,
   HistoryEntry,
   HttpExchange,
   ImportReport,
@@ -329,6 +330,13 @@ export const api = {
   /** Closes a stream. Says whether one was open. */
   streamClose: (executionId: string) =>
     call<boolean>('stream_close', { executionId }),
+
+  /** Asks a gRPC server which methods it serves. */
+  grpcSchema: (doc: RequestDoc, environment: string | null) =>
+    call<GrpcSchema>('grpc_schema', { doc, environment }),
+  /** Calls a gRPC method. JSON in, JSON out. */
+  grpcSend: (doc: RequestDoc, environment: string | null) =>
+    call<string>('grpc_send', { doc, environment }),
 
   /** Asks a GraphQL endpoint what it accepts. */
   graphqlSchema: (doc: RequestDoc, environment: string | null) =>

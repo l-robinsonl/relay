@@ -119,6 +119,8 @@ pub fn run() {
             commands::sync_join_invited,
             commands::graphql_schema,
             commands::stream_open,
+            commands::grpc_schema,
+            commands::grpc_send,
             commands::stream_send,
             commands::stream_close,
             commands::sync_members,

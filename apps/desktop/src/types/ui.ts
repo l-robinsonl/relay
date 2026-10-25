@@ -43,7 +43,14 @@ export type TabResult =
   | { kind: 'cancelled'; elapsedMs: number }
 
 /** Sections of the request editor. */
-export type RequestSection = 'params' | 'headers' | 'body' | 'auth' | 'scripts' | 'settings'
+export type RequestSection =
+  | 'method'
+  | 'params'
+  | 'headers'
+  | 'body'
+  | 'auth'
+  | 'scripts'
+  | 'settings'
 
 /** Sections of the response panel. */
 export type ResponseTab = 'body' | 'headers' | 'cookies' | 'tests'

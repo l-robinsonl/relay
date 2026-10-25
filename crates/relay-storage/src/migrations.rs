@@ -40,6 +40,11 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "request_kind",
         sql: include_str!("../migrations/0004_request_kind.sql"),
     },
+    Migration {
+        version: 5,
+        name: "grpc_method",
+        sql: include_str!("../migrations/0005_grpc_method.sql"),
+    },
 ];
 
 /// The schema version this build expects.

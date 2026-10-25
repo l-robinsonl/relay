@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   httpSend: vi.fn(),
   httpSendWithTests: vi.fn(),
   httpCancel: vi.fn(),
+  grpcSend: vi.fn(),
   streamOpen: vi.fn(),
   streamSend: vi.fn(),
   streamClose: vi.fn(),
@@ -20,7 +21,14 @@ vi.mock('@/services/ipc', () => ({
   onExecutionProgress: vi.fn().mockResolvedValue(() => {}),
   onStreamEvent: vi.fn().mockResolvedValue(() => {}),
   isRelayError: () => false,
-  toRelayError: (e: unknown) => ({ kind: 'internal', message: String(e) }),
+  // Faithful to the real one for a structured error: a mock that
+  // stringified everything turned `NotFound: no such customer` into
+  // `[object Object]` and the test asserting on it looked like a
+  // code bug.
+  toRelayError: (e: unknown) =>
+    e && typeof e === 'object' && 'message' in e
+      ? e
+      : { kind: 'internal', message: String(e) },
 }))
 
 vi.mock('@/stores/workspace', () => ({
@@ -318,6 +326,71 @@ describe('sending', () => {
     await tabs.send(tab.id)
 
     // A failure must not leave the Send button stuck showing Cancel.
+    expect(tabs.tabs[0]!.executionId).toBeNull()
+  })
+})
+
+describe('gRPC', () => {
+  function grpcTab () {
+    const tabs = useTabsStore()
+    const tab = tabs.openDraft()!
+    tabs.update(tab.id, {
+      kind: 'grpc',
+      url: 'localhost:50051',
+      grpcMethod: 'relay.test.Echo/Say',
+    })
+    return { tabs, tab }
+  }
+
+  it('send calls the method rather than making an HTTP request', async () => {
+    const { tabs, tab } = grpcTab()
+    mocks.grpcSend.mockResolvedValue('{"text":"hi"}')
+
+    await tabs.send(tab.id)
+
+    expect(mocks.grpcSend).toHaveBeenCalled()
+    expect(mocks.httpSendWithTests).not.toHaveBeenCalled()
+    expect(mocks.streamOpen).not.toHaveBeenCalled()
+  })
+
+  it('the answer lands where a response goes', async () => {
+    // One place to look, whichever protocol produced it.
+    const { tabs, tab } = grpcTab()
+    mocks.grpcSend.mockResolvedValue('{"text":"hi"}')
+
+    await tabs.send(tab.id)
+
+    const result = tabs.tabs[0]!.result
+    expect(result?.kind).toBe('response')
+    expect(result?.kind === 'response' && result.response.body).toEqual({
+      kind: 'text',
+      text: '{"text":"hi"}',
+    })
+  })
+
+  it("a refusal keeps the server's own status", async () => {
+    // `NotFound: no such customer` is the thing somebody testing a
+    // service wants; "the call failed" is not.
+    const { tabs, tab } = grpcTab()
+    mocks.grpcSend.mockRejectedValue({
+      kind: 'invalid',
+      message: 'NotFound: no such customer',
+    })
+
+    await tabs.send(tab.id)
+
+    const result = tabs.tabs[0]!.result
+    expect(result?.kind).toBe('error')
+    expect(result?.kind === 'error' && result.error.message).toContain('NotFound')
+  })
+
+  it('clears the in-flight marker whichever way it ends', async () => {
+    const { tabs, tab } = grpcTab()
+    mocks.grpcSend.mockRejectedValue(new Error('nope'))
+
+    await tabs.send(tab.id)
+
+    // Or the Send button stays showing Cancel forever.
     expect(tabs.tabs[0]!.executionId).toBeNull()
   })
 })

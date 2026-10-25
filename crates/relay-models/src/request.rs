@@ -498,6 +498,11 @@ pub enum RequestKind {
     /// events and does not end.
     #[serde(rename = "sse")]
     Sse,
+    /// gRPC: a method on a service, discovered at runtime rather than
+    /// compiled in. The URL is the server, and the method lives in
+    /// `grpc_method`.
+    #[serde(rename = "grpc")]
+    Grpc,
 }
 
 impl RequestKind {
@@ -507,6 +512,7 @@ impl RequestKind {
             Self::Http => "http",
             Self::WebSocket => "websocket",
             Self::Sse => "sse",
+            Self::Grpc => "grpc",
         }
     }
 
@@ -516,6 +522,7 @@ impl RequestKind {
         match raw {
             "websocket" => Self::WebSocket,
             "sse" => Self::Sse,
+            "grpc" => Self::Grpc,
             _ => Self::Http,
         }
     }
@@ -541,6 +548,13 @@ pub struct RequestDoc {
     pub description: String,
     #[serde(default)]
     pub kind: RequestKind,
+    /// Which gRPC method, as `package.Service/Method`.
+    ///
+    /// One field rather than two because that is how the path is
+    /// spelled, how grpcurl takes it, and how anybody reading a
+    /// service's documentation has it in their head.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub grpc_method: String,
     #[serde(default)]
     pub method: HttpMethod,
     #[serde(default)]
@@ -582,6 +596,7 @@ impl RequestDoc {
             name: name.into(),
             description: String::new(),
             kind: RequestKind::Http,
+            grpc_method: String::new(),
             method: HttpMethod::Get,
             url: String::new(),
             headers: Vec::new(),

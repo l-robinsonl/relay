@@ -9,4 +9,4 @@
  * inherits every one of those for free, and means history, sync and
  * collections did not each need a second case.
  */
-export type RequestKind = "http" | "websocket" | "sse";
+export type RequestKind = "http" | "websocket" | "sse" | "grpc";

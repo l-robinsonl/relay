@@ -18,6 +18,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2.7", features = [] }
 
 [dependencies]
+relay-grpc.workspace = true
 relay-models.workspace = true
 relay-core.workspace = true
 relay-http.workspace = true

@@ -10,6 +10,8 @@ description = "Relay application services: the logic behind every Tauri command.
 [dependencies]
 relay-models.workspace = true
 relay-core.workspace = true
+relay-grpc.workspace = true
+prost-reflect = "0.16"
 relay-http.workspace = true
 relay-storage.workspace = true
 relay-script.workspace = true

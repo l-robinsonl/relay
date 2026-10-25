@@ -18,7 +18,15 @@ export type RequestDoc = { id: RequestId, workspaceId: WorkspaceId,
 /**
  * `None` for a request that sits directly in the workspace root.
  */
-collectionId?: CollectionId | null, name: string, description: string, kind: RequestKind, method: HttpMethod, url: string, headers: Array<KeyValue>, queryParams: Array<KeyValue>, pathParams: Array<KeyValue>, body: RequestBody, auth: AuthConfig, settings: RequestSettings, scripts: RequestScripts, tags: Array<string>, 
+collectionId?: CollectionId | null, name: string, description: string, kind: RequestKind, 
+/**
+ * Which gRPC method, as `package.Service/Method`.
+ *
+ * One field rather than two because that is how the path is
+ * spelled, how grpcurl takes it, and how anybody reading a
+ * service's documentation has it in their head.
+ */
+grpcMethod?: string, method: HttpMethod, url: string, headers: Array<KeyValue>, queryParams: Array<KeyValue>, pathParams: Array<KeyValue>, body: RequestBody, auth: AuthConfig, settings: RequestSettings, scripts: RequestScripts, tags: Array<string>, 
 /**
  * Position among siblings. A float so that reordering by drag-and-drop
  * only rewrites the moved row instead of renumbering the whole folder.
