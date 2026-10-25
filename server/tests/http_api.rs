@@ -1772,6 +1772,66 @@ async fn start_hosting_assistant() -> TestServer {
     start_with(store, config).await
 }
 
+/// A stub Anthropic that streams a fixed answer.
+///
+/// Returns its URL. The point is that the proxy is exercised for
+/// real: it was previously only reachable against the live API, so
+/// nothing in CI had ever run a byte through it.
+async fn stub_upstream() -> String {
+    use axum::response::sse::{Event, Sse};
+    use futures_util::stream;
+
+    let events = vec![
+        ("message_start", r#"{"message":{"usage":{"input_tokens":40,"cache_read_input_tokens":1000}}}"#),
+        ("content_block_delta", r#"{"index":0,"delta":{"type":"text_delta","text":"Two "}}"#),
+        ("content_block_delta", r#"{"index":0,"delta":{"type":"text_delta","text":"words"}}"#),
+        ("message_delta", r#"{"delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":7}}"#),
+    ];
+
+    use futures_util::StreamExt;
+
+    let app = axum::Router::new().route(
+        "/v1/messages",
+        axum::routing::post(move || {
+            let events = events.clone();
+            async move {
+                Sse::new(stream::iter(events).map(|(name, data)| {
+                    Ok::<_, std::convert::Infallible>(Event::default().event(name).data(data))
+                }))
+            }
+        }),
+    );
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    format!("http://{addr}")
+}
+
+/// A hosting server pointed at a stub upstream.
+async fn start_streaming_assistant() -> TestServer {
+    let store = SqliteStore::connect("sqlite::memory:").await.unwrap();
+    store.migrate().await.unwrap();
+
+    let config = Config {
+        public_url: "https://relay.test".into(),
+        signup_mode: SignupMode::Open,
+        session_ttl: std::time::Duration::from_secs(3600),
+        stripe_secret_key: Some("sk_test_whatever".into()),
+        stripe_webhook_secret: Some(WEBHOOK_SECRET.into()),
+        stripe_price_id: Some("price_seat".into()),
+        stripe_price_assistant_annual: Some("price_with_ai".into()),
+        assistant_key: Some("sk-ant-not-used-here".into()),
+        assistant_turns: 3,
+        assistant_base_url: Some(stub_upstream().await),
+        ..Config::default()
+    };
+
+    start_with(store, config).await
+}
+
 /// Puts a workspace on a given price, the way a webhook would.
 async fn subscribe(server: &TestServer, workspace: &str, price: &str) {
     server
@@ -1787,6 +1847,155 @@ async fn subscribe(server: &TestServer, workspace: &str, price: &str) {
         })
         .await
         .unwrap();
+}
+
+#[tokio::test]
+async fn a_streamed_turn_is_forwarded_event_for_event() {
+    // The client reads these with the same code it uses against
+    // Anthropic directly, so anything reshaped here breaks it.
+    let server = start_streaming_assistant().await;
+    let token = owner_with_workspace(&server).await;
+    subscribe(&server, "w1", "price_with_ai").await;
+
+    let response = server
+        .post_auth(
+            "/v1/assistant/messages/stream",
+            &token,
+            json!({"system": "be brief", "messages": [], "tools": []}),
+        )
+        .await;
+
+    assert_eq!(response.status(), 200);
+    assert_eq!(
+        response
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok()),
+        Some("text/event-stream")
+    );
+    // A reverse proxy that buffers would undo the whole endpoint.
+    assert_eq!(
+        response
+            .headers()
+            .get("x-accel-buffering")
+            .and_then(|v| v.to_str().ok()),
+        Some("no")
+    );
+
+    let body = response.text().await.unwrap();
+    assert!(body.contains("event: content_block_delta"), "{body}");
+    assert!(body.contains("Two "), "{body}");
+    assert!(body.contains("words"), "{body}");
+}
+
+#[tokio::test]
+async fn a_streamed_turn_is_counted_against_the_allowance() {
+    // Billing happens after the stream, so a turn that was never
+    // recorded is one the subscriber got free.
+    let server = start_streaming_assistant().await;
+    let token = owner_with_workspace(&server).await;
+    subscribe(&server, "w1", "price_with_ai").await;
+
+    let before: Value = server
+        .get_auth("/v1/assistant/usage", &token)
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(before["used"], 0);
+
+    let response = server
+        .post_auth(
+            "/v1/assistant/messages/stream",
+            &token,
+            json!({"system": "x", "messages": [], "tools": []}),
+        )
+        .await;
+    let _ = response.text().await;
+
+    // The record is written from a task once the body is dropped, so
+    // it may land a moment after the last byte.
+    let mut used = 0;
+    for _ in 0..40 {
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        let now: Value = server
+            .get_auth("/v1/assistant/usage", &token)
+            .await
+            .json()
+            .await
+            .unwrap();
+        used = now["used"].as_u64().unwrap_or(0);
+        if used > 0 {
+            break;
+        }
+    }
+
+    assert_eq!(used, 1, "a streamed turn was not counted");
+}
+
+#[tokio::test]
+async fn streaming_is_refused_once_the_allowance_is_gone() {
+    // And before a single token is generated: the check is the only
+    // thing standing between a used-up plan and an unmetered one.
+    let server = start_streaming_assistant().await;
+    let token = owner_with_workspace(&server).await;
+    subscribe(&server, "w1", "price_with_ai").await;
+
+    let me: Value = server
+        .get_auth("/v1/auth/me", &token)
+        .await
+        .json()
+        .await
+        .unwrap();
+    let user_id = me["id"].as_str().unwrap();
+
+    for _ in 0..3 {
+        server
+            .store
+            .record_assistant_turn(
+                user_id,
+                relay_server::billing::period_start(
+                    relay_models::Timestamp::now().as_millis(),
+                ),
+                relay_server::billing::AssistantUsage {
+                    turns: 1,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+    }
+
+    let response = server
+        .post_auth(
+            "/v1/assistant/messages/stream",
+            &token,
+            json!({"system": "x", "messages": [], "tools": []}),
+        )
+        .await;
+
+    // Payment Required, like the seat limit — not a malformed request.
+    assert_eq!(response.status(), 402);
+    let body: Value = response.json().await.unwrap();
+    let message = body["message"].as_str().unwrap_or_default();
+    assert!(message.contains("own"), "no mention of their own key: {message}");
+}
+
+#[tokio::test]
+async fn streaming_needs_a_plan_that_includes_the_assistant() {
+    let server = start_streaming_assistant().await;
+    let token = owner_with_workspace(&server).await;
+    subscribe(&server, "w1", "price_seat").await;
+
+    let response = server
+        .post_auth(
+            "/v1/assistant/messages/stream",
+            &token,
+            json!({"system": "x", "messages": [], "tools": []}),
+        )
+        .await;
+
+    assert_eq!(response.status(), 402);
 }
 
 #[tokio::test]

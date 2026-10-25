@@ -640,6 +640,121 @@ pub async fn assistant_messages(
     Ok(Json(answer))
 }
 
+/// `POST /v1/assistant/messages/stream`
+///
+/// The same turn, forwarded as it is written so the person watches
+/// the answer appear rather than a spinner. The provider's events go
+/// through byte for byte, which is what lets the client read them
+/// with the same code it uses when talking to Anthropic directly.
+pub async fn assistant_stream(
+    State(state): State<AppState>,
+    user: AuthenticatedUser,
+    Json(turn): Json<crate::assistant::TurnRequest>,
+) -> ServerResult<axum::response::Response> {
+    use futures_util::StreamExt;
+
+    let assistant = state
+        .assistant
+        .as_ref()
+        .ok_or_else(|| ServerError::BadRequest("this server does not host the assistant".into()))?;
+
+    let allowance = allowance_for(&state, &user.0.id).await?;
+    if !allowance.allowed {
+        return Err(ServerError::LimitExceeded {
+            limit: "assistantTurns",
+            message: allowance
+                .notice
+                .unwrap_or_else(|| "No assistant requests left this month.".into()),
+        });
+    }
+
+    // Opened before anything is forwarded: a refusal from the
+    // provider is a status while there is still a status to send. A
+    // moment later the client holds a 200 and there is nowhere to put
+    // the bad news but the stream itself.
+    let upstream = assistant.open_stream(&turn).await?;
+
+    // Records what the turn cost when the forwarding ends — whether
+    // the provider finished, the client closed the window, or the
+    // connection broke. The provider charges for what it generated in
+    // every one of those cases, and a counter that only increments on
+    // the happy path is a hole anybody could find.
+    struct Billed {
+        store: std::sync::Arc<dyn crate::store::SyncStore>,
+        user: String,
+        /// Shared with the forwarding closure rather than written
+        /// through this struct. A closure captures disjoint fields,
+        /// so a closure that only assigned `billed.usage` would
+        /// capture that field alone and leave the guard to drop
+        /// here, recording nothing — which is how this was first
+        /// written, and what the test caught.
+        usage: std::sync::Arc<std::sync::Mutex<crate::billing::AssistantUsage>>,
+    }
+
+    impl Drop for Billed {
+        fn drop(&mut self) {
+            let usage = self
+                .usage
+                .lock()
+                .map(|u| *u)
+                .unwrap_or_default();
+
+            // Nothing was generated, so there is nothing to bill — an
+            // upstream that refused before the first event must not
+            // come out of somebody's allowance.
+            if usage.turns == 0 {
+                return;
+            }
+
+            let (store, user) = (self.store.clone(), self.user.clone());
+            let period = crate::billing::period_start(Timestamp::now().as_millis());
+            tokio::spawn(async move {
+                if let Err(error) = store.record_assistant_turn(&user, period, usage).await {
+                    // Loud: a limiter that silently stops counting is
+                    // worse than no limiter.
+                    tracing::error!(%error, user = %user, "could not record assistant usage");
+                }
+            });
+        }
+    }
+
+    let counted = std::sync::Arc::new(std::sync::Mutex::new(
+        crate::billing::AssistantUsage::default(),
+    ));
+    let billed = Billed {
+        store: state.store.clone(),
+        user: user.0.id.clone(),
+        usage: counted.clone(),
+    };
+
+    let mut watcher = crate::assistant::UsageWatcher::new();
+    let body = upstream.bytes_stream().map(move |chunk| {
+        // Names the whole guard so the closure captures all of it.
+        // Without this the guard is not moved into the stream, and
+        // the turn is recorded when the handler returns instead of
+        // when the answer finishes — which is to say, never.
+        let _keep = &billed;
+
+        if let Ok(bytes) = &chunk {
+            watcher.observe(&String::from_utf8_lossy(bytes));
+            if let Ok(mut total) = counted.lock() {
+                *total = watcher.usage();
+            }
+        }
+        chunk
+    });
+
+    axum::response::Response::builder()
+        .header(axum::http::header::CONTENT_TYPE, "text/event-stream")
+        .header(axum::http::header::CACHE_CONTROL, "no-cache")
+        // Without this a reverse proxy may buffer the whole thing and
+        // hand it over at the end, which is the problem this endpoint
+        // exists to solve.
+        .header("x-accel-buffering", "no")
+        .body(axum::body::Body::from_stream(body))
+        .map_err(|e| ServerError::Assistant(e.to_string()))
+}
+
 /// `GET /v1/assistant/usage`
 ///
 /// What the chat panel shows when somebody asks where they stand, and

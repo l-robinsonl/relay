@@ -56,19 +56,12 @@ impl RelayProvider {
     }
 }
 
-#[async_trait]
-impl ModelProvider for RelayProvider {
-    fn name(&self) -> &'static str {
-        "Relay"
-    }
-
-    fn default_model(&self) -> &'static str {
-        // The server decides, and says so in its own settings. Naming
-        // one here would be a claim this process cannot keep.
-        "chosen by the server"
-    }
-
-    async fn complete(&self, request: CompletionRequest<'_>) -> AgentResult<CompletionResponse> {
+impl RelayProvider {
+    /// The request body, shared by both paths.
+    ///
+    /// Model and token ceiling are deliberately absent: the server
+    /// sets both, and would ignore them anyway.
+    fn body_for(request: &CompletionRequest<'_>) -> Value {
         let tools: Vec<Value> = request
             .tools
             .iter()
@@ -82,19 +75,20 @@ impl ModelProvider for RelayProvider {
             })
             .collect();
 
-        // Model and token ceiling are deliberately absent: the server
-        // sets both, and would ignore them anyway.
-        let body = json!({
+        json!({
             "system": request.system,
             "messages": super::anthropic::encode_messages(request.messages),
             "tools": tools,
-        });
+        })
+    }
 
+    /// Posts to one of the two assistant endpoints and checks the status.
+    async fn send(&self, path: &str, body: &Value) -> AgentResult<reqwest::Response> {
         let response = self
             .client
-            .post(format!("{}/v1/assistant/messages", self.base_url))
+            .post(format!("{}{path}", self.base_url))
             .bearer_auth(&self.token)
-            .json(&body)
+            .json(body)
             .send()
             .await
             .map_err(|e| AgentError::Transport {
@@ -103,14 +97,18 @@ impl ModelProvider for RelayProvider {
             })?;
 
         let status = response.status();
-        if !status.is_success() {
+        if status.is_success() {
+            return Ok(response);
+        }
+
+        {
             let detail = response.text().await.unwrap_or_default();
             let message = serde_json::from_str::<Value>(&detail)
                 .ok()
                 .and_then(|v| v["message"].as_str().map(str::to_string))
                 .unwrap_or(detail);
 
-            return Err(match status.as_u16() {
+            Err(match status.as_u16() {
                 401 | 403 => AgentError::BadApiKey {
                     provider: "Relay".into(),
                 },
@@ -133,8 +131,28 @@ impl ModelProvider for RelayProvider {
                     status: other,
                     detail: message,
                 },
-            });
+            })
         }
+    }
+}
+
+#[async_trait]
+impl ModelProvider for RelayProvider {
+    fn name(&self) -> &'static str {
+        "Relay"
+    }
+
+    fn default_model(&self) -> &'static str {
+        // The server decides, and says so in its own settings. Naming
+        // one here would be a claim this process cannot keep.
+        "chosen by the server"
+    }
+
+    async fn complete(&self, request: CompletionRequest<'_>) -> AgentResult<CompletionResponse> {
+        let response = self
+            .send("/v1/assistant/messages", &Self::body_for(&request))
+            .await?;
+        let status = response.status();
 
         let body: Value = response.json().await.map_err(|e| AgentError::Provider {
             provider: "Relay".into(),
@@ -171,6 +189,31 @@ impl ModelProvider for RelayProvider {
             input_tokens: body["usage"]["inputTokens"].as_u64().unwrap_or(0) as u32,
             output_tokens: body["usage"]["outputTokens"].as_u64().unwrap_or(0) as u32,
         })
+    }
+
+    async fn complete_streaming(
+        &self,
+        request: CompletionRequest<'_>,
+        on_delta: super::OnDelta<'_>,
+    ) -> AgentResult<CompletionResponse> {
+        // The server forwards the provider's events untouched, so the
+        // same accumulator reads them. A subscriber and somebody on
+        // their own key see the answer arrive identically, which is
+        // the point of the tier costing more rather than less.
+        let response = self
+            .send("/v1/assistant/messages/stream", &Self::body_for(&request))
+            .await?;
+
+        let mut accumulator = super::stream::AnthropicAccumulator::new();
+        super::stream::read_events("Relay", response, |event, data| {
+            if let Some(fragment) = accumulator.push(event, data) {
+                on_delta(&fragment);
+            }
+            Ok(())
+        })
+        .await?;
+
+        Ok(accumulator.finish())
     }
 }
 

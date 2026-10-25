@@ -17,6 +17,11 @@ path = "src/lib.rs"
 
 [dependencies]
 relay-models.workspace = true
+# For the server-sent events parser. The assistant proxy forwards a
+# provider's stream byte for byte and reads the usage figures out of
+# the same events as they go past; a second parser would be a second
+# place for the chunk-boundary bug to live.
+relay-http.workspace = true
 relay-sync.workspace = true
 
 axum = { version = "0.8", features = ["macros", "ws"] }

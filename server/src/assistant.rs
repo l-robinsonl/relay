@@ -149,17 +149,49 @@ impl Assistant {
         body
     }
 
-    /// Runs one request against the model.
-    pub async fn run(&self, turn: &TurnRequest) -> ServerResult<TurnResponse> {
+    /// Sends a built body upstream and checks the status.
+    async fn send(&self, body: &Value) -> ServerResult<reqwest::Response> {
         let response = self
             .client
             .post(format!("{}/v1/messages", self.base_url))
             .header("x-api-key", &self.api_key)
             .header("anthropic-version", API_VERSION)
-            .json(&self.body_for(turn))
+            .json(body)
             .send()
             .await
             .map_err(|e| ServerError::Assistant(format!("could not be reached: {e}")))?;
+
+        let status = response.status();
+        if status.is_success() {
+            return Ok(response);
+        }
+
+        // The provider's own message is the operator's best clue — an
+        // expired key, a model that was retired — and it carries
+        // nothing of the conversation.
+        let text = response.text().await.unwrap_or_default();
+        let detail = serde_json::from_str::<Value>(&text)
+            .ok()
+            .and_then(|v| v["error"]["message"].as_str().map(str::to_string))
+            .unwrap_or(text);
+        Err(ServerError::Assistant(format!("{status}: {detail}")))
+    }
+
+    /// Opens a streaming request, returning the raw upstream response.
+    ///
+    /// The caller forwards the body on untouched. A failure before the
+    /// first byte still arrives as a status, which is the only chance
+    /// to report one properly — after that the client has a 200 and a
+    /// half-written answer.
+    pub async fn open_stream(&self, turn: &TurnRequest) -> ServerResult<reqwest::Response> {
+        let mut body = self.body_for(turn);
+        body["stream"] = Value::Bool(true);
+        self.send(&body).await
+    }
+
+    /// Runs one request against the model.
+    pub async fn run(&self, turn: &TurnRequest) -> ServerResult<TurnResponse> {
+        let response = self.send(&self.body_for(turn)).await?;
 
         let status = response.status();
         let text = response.text().await.unwrap_or_default();
@@ -183,6 +215,68 @@ impl Assistant {
             stop_reason: body["stop_reason"].as_str().map(str::to_string),
             usage: read_usage(&body["usage"]),
         })
+    }
+}
+
+/// Watches a forwarded stream for the figures a turn is billed on.
+///
+/// The bytes go to the client untouched — the client reads them as
+/// Anthropic's own events, which is what lets it share one
+/// accumulator with the direct path. This only looks.
+#[derive(Debug, Default)]
+pub struct UsageWatcher {
+    parser: relay_http::sse::EventParser,
+    usage: AssistantUsage,
+}
+
+impl UsageWatcher {
+    /// A fresh watcher.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Feeds a chunk on its way past.
+    pub fn observe(&mut self, chunk: &str) {
+        for event in self.parser.push(chunk) {
+            let Ok(data) = serde_json::from_str::<Value>(&event.data) else {
+                continue;
+            };
+            match event.event.as_str() {
+                "message_start" => {
+                    let counted = read_usage(&data["message"]["usage"]);
+                    // One turn, however many events it takes.
+                    self.usage.turns = 1;
+                    self.usage.input_tokens += counted.input_tokens;
+                    self.usage.cached_tokens += counted.cached_tokens;
+                }
+                "message_delta" => {
+                    self.usage.output_tokens +=
+                        data["usage"]["output_tokens"].as_u64().unwrap_or(0);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// What the turn cost, so far.
+    ///
+    /// "So far" on purpose: a connection dropped halfway still spent
+    /// everything generated up to that point, and the provider bills
+    /// it either way.
+    ///
+    /// The turn itself counts from the moment the model starts
+    /// producing, and not before — an upstream that refused generated
+    /// nothing and must not come out of somebody's allowance. Setting
+    /// this is what makes a streamed turn count at all: `turns`
+    /// defaults to zero, and a route recording that would hand out
+    /// the hosted assistant unmetered.
+    pub fn usage(&self) -> AssistantUsage {
+        self.usage
+    }
+
+    /// Whether the model produced anything.
+    pub fn started(&self) -> bool {
+        self.usage.turns > 0
     }
 }
 

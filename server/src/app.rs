@@ -93,6 +93,10 @@ impl AppState {
                     config.assistant_key.clone().unwrap_or_default(),
                     config.assistant_model.clone(),
                 )
+                .map(|assistant| match &config.assistant_base_url {
+                    Some(url) => assistant.with_base_url(url),
+                    None => assistant,
+                })
             })
             .transpose()
             .unwrap_or_else(|error| {
@@ -247,6 +251,10 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/v1/assistant/usage", get(routes::assistant_usage))
         .route("/v1/assistant/messages", post(routes::assistant_messages))
+        .route(
+            "/v1/assistant/messages/stream",
+            post(routes::assistant_stream),
+        )
         .route("/v1/billing/webhook", post(routes::billing_webhook))
         // Where Stripe returns the browser. Named in every checkout
         // session, so they have to exist.

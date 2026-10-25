@@ -84,6 +84,13 @@ pub struct Config {
     pub assistant_model: String,
     /// Turns included per person per calendar month.
     pub assistant_turns: u32,
+    /// Where to send model requests, when not Anthropic directly.
+    ///
+    /// For an organisation putting a gateway in front of the API, and
+    /// for the tests — without it the proxy could only ever be
+    /// exercised against the real thing, which is why it went
+    /// untested until it existed.
+    pub assistant_base_url: Option<String>,
 
     /// Whether `X-Forwarded-For` can be believed.
     ///
@@ -155,6 +162,7 @@ impl Config {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(1000),
+            assistant_base_url: non_empty("RELAY_ASSISTANT_BASE_URL"),
             trust_forwarded_for: flag("RELAY_TRUST_FORWARDED_FOR", false),
         })
     }
@@ -194,6 +202,7 @@ impl Default for Config {
             assistant_key: None,
             assistant_model: "claude-haiku-5-5".into(),
             assistant_turns: 1000,
+            assistant_base_url: None,
             trust_forwarded_for: false,
         }
     }
