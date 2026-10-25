@@ -2539,10 +2539,27 @@ impl StubStripe {
             move |uri: axum::http::Uri, body: String| {
                 let recorder = recorder.clone();
                 async move {
-                    recorder
-                        .lock()
-                        .unwrap()
-                        .push((uri.path().to_string(), body));
+                    let path = uri.path().to_string();
+                    recorder.lock().unwrap().push((path.clone(), body));
+
+                    // Reading a price back, so the amounts the panel
+                    // shows come from here rather than from a figure
+                    // typed into Relay's own settings.
+                    if let Some(id) = path.strip_prefix("/v1/prices/") {
+                        let (amount, interval) = match id {
+                            "price_seat" => (2400, "year"),
+                            "price_sync_monthly" => (300, "month"),
+                            "price_assistant_annual" => (6000, "year"),
+                            _ => (0, "month"),
+                        };
+                        return axum::Json(json!({
+                            "id": id,
+                            "unit_amount": amount,
+                            "currency": "gbp",
+                            "recurring": { "interval": interval },
+                        }));
+                    }
+
                     axum::Json(json!({ "id": "cs_test_1", "url": "https://stripe.test/pay" }))
                 }
             },
@@ -2559,6 +2576,17 @@ impl StubStripe {
             calls,
             handle,
         }
+    }
+
+    /// The body of the most recent call to `path`.
+    fn last_body(&self, path: &str) -> String {
+        let calls = self.calls.lock().unwrap();
+        calls
+            .iter()
+            .rev()
+            .find(|(p, _)| p == path)
+            .map(|(_, body)| body.clone())
+            .unwrap_or_else(|| panic!("no call to {path} in {calls:?}"))
     }
 
     /// The body of the one call made to `path`.
@@ -2610,6 +2638,8 @@ async fn start_billing(stub: &StubStripe) -> TestServer {
         stripe_secret_key: Some("sk_test_whatever".into()),
         stripe_webhook_secret: Some(WEBHOOK_SECRET.into()),
         stripe_price_id: Some("price_seat".into()),
+        stripe_price_sync_monthly: Some("price_sync_monthly".into()),
+        stripe_price_assistant_annual: Some("price_assistant_annual".into()),
         ..Config::default()
     };
 
@@ -2617,7 +2647,7 @@ async fn start_billing(stub: &StubStripe) -> TestServer {
     let store: Arc<dyn SyncStore> = Arc::new(store);
     let mut state = AppState::with_mailer(store.clone(), config, mail.clone());
     state.stripe = Some(Arc::new(
-        relay_server::billing::stripe::Stripe::new("sk_test_whatever", "price_seat")
+        relay_server::billing::stripe::Stripe::new("sk_test_whatever")
             .unwrap()
             .with_base_url(&stub.base),
     ));
@@ -2769,6 +2799,157 @@ async fn a_server_that_does_not_charge_refuses_to_start_a_checkout() {
         .post_auth("/v1/workspaces/w1/billing/checkout", &token, json!({}))
         .await;
     assert_eq!(response.status(), 400);
+}
+
+#[tokio::test]
+async fn the_plans_on_offer_carry_stripes_own_amounts() {
+    // Not Relay's. A figure in a config file is a figure that can
+    // disagree with what the card is charged, and the one place that
+    // must never happen is the button taking the money.
+    let stub = StubStripe::start().await;
+    let server = start_billing(&stub).await;
+    let token = owner_with_workspace(&server).await;
+
+    let view: Value = server
+        .get_auth("/v1/workspaces/w1/billing", &token)
+        .await
+        .json()
+        .await
+        .unwrap();
+
+    let plans = view["plans"].as_array().expect("no plans offered");
+    assert_eq!(plans.len(), 3, "{plans:#?}");
+
+    // Cheapest first, so a default choice is never the dearest.
+    assert_eq!(plans[0]["id"], "sync-annual");
+    assert_eq!(plans[0]["amount"], 2400);
+    assert_eq!(plans[0]["interval"], "year");
+    assert_eq!(plans[0]["currency"], "gbp");
+    assert_eq!(plans[0]["includesAssistant"], false);
+
+    assert_eq!(plans[1]["id"], "sync-monthly");
+    assert_eq!(plans[1]["amount"], 300);
+
+    assert_eq!(plans[2]["id"], "assistant-annual");
+    assert_eq!(plans[2]["includesAssistant"], true);
+}
+
+#[tokio::test]
+async fn a_deployment_offers_only_the_prices_it_configured() {
+    // An operator who set up annual sync and nothing else sells
+    // exactly that, and the client is told rather than offered a
+    // button that fails after the click.
+    let stub = StubStripe::start().await;
+    let store = SqliteStore::connect("sqlite::memory:").await.unwrap();
+    store.migrate().await.unwrap();
+
+    let config = Config {
+        public_url: "https://relay.test".into(),
+        signup_mode: SignupMode::Open,
+        session_ttl: std::time::Duration::from_secs(3600),
+        stripe_secret_key: Some("sk_test_whatever".into()),
+        stripe_webhook_secret: Some(WEBHOOK_SECRET.into()),
+        stripe_price_id: Some("price_seat".into()),
+        ..Config::default()
+    };
+
+    let mail = Arc::new(relay_server::mail::CapturingMailer::new());
+    let store: Arc<dyn SyncStore> = Arc::new(store);
+    let mut state = AppState::with_mailer(store.clone(), config, mail.clone());
+    state.stripe = Some(Arc::new(
+        relay_server::billing::stripe::Stripe::new("sk_test_whatever")
+            .unwrap()
+            .with_base_url(&stub.base),
+    ));
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let handle = tokio::spawn(async move {
+        let _ = axum::serve(listener, relay_server::router(state)).await;
+    });
+    let server = TestServer {
+        base: format!("http://{addr}"),
+        client: reqwest::Client::new(),
+        handle,
+        mail,
+        store,
+    };
+
+    let token = owner_with_workspace(&server).await;
+    let view: Value = server
+        .get_auth("/v1/workspaces/w1/billing", &token)
+        .await
+        .json()
+        .await
+        .unwrap();
+
+    let plans = view["plans"].as_array().unwrap();
+    assert_eq!(plans.len(), 1);
+    // The original single-price variable, still selling what it sold.
+    assert_eq!(plans[0]["id"], "sync-annual");
+    assert_eq!(view["metered"], true);
+}
+
+#[tokio::test]
+async fn a_checkout_buys_the_plan_that_was_chosen() {
+    let stub = StubStripe::start().await;
+    let server = start_billing(&stub).await;
+    let token = owner_with_workspace(&server).await;
+
+    let response = server
+        .post_auth(
+            "/v1/workspaces/w1/billing/checkout",
+            &token,
+            json!({ "plan": "assistant-annual" }),
+        )
+        .await;
+    assert_eq!(response.status(), 200);
+
+    let form = stub.last_body("/v1/checkout/sessions");
+    assert!(
+        form.contains("price_assistant_annual"),
+        "the chosen plan was not the one sold: {form}"
+    );
+}
+
+#[tokio::test]
+async fn naming_no_plan_buys_the_cheapest_configured_one() {
+    // A client too old to send a choice still buys something
+    // sensible rather than failing.
+    let stub = StubStripe::start().await;
+    let server = start_billing(&stub).await;
+    let token = owner_with_workspace(&server).await;
+
+    server
+        .post_auth("/v1/workspaces/w1/billing/checkout", &token, json!({}))
+        .await;
+
+    let form = stub.last_body("/v1/checkout/sessions");
+    assert!(form.contains("price_seat"), "{form}");
+}
+
+#[tokio::test]
+async fn a_plan_this_server_does_not_sell_is_refused_by_name() {
+    // Quietly selling the default instead would charge somebody for
+    // something they did not choose.
+    let stub = StubStripe::start().await;
+    let server = start_billing(&stub).await;
+    let token = owner_with_workspace(&server).await;
+
+    let response = server
+        .post_auth(
+            "/v1/workspaces/w1/billing/checkout",
+            &token,
+            json!({ "plan": "assistant-monthly" }),
+        )
+        .await;
+
+    assert_eq!(response.status(), 400);
+    let body: Value = response.json().await.unwrap();
+    let message = body["message"].as_str().unwrap_or_default();
+    assert!(message.contains("assistant-monthly"), "{message}");
+    // And says what it does sell.
+    assert!(message.contains("sync-annual"), "{message}");
 }
 
 #[tokio::test]

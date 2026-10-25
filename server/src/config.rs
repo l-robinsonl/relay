@@ -61,7 +61,11 @@ pub struct Config {
     pub stripe_secret_key: Option<String>,
     /// The secret webhooks are signed with.
     pub stripe_webhook_secret: Option<String>,
-    /// The per-seat price to charge.
+    /// The per-seat price to charge, under its original name.
+    ///
+    /// Kept as a spelling of `stripe_price_sync_annual` so a
+    /// deployment configured before there were four prices keeps
+    /// working. Read it through [`Config::plans`], never directly.
     pub stripe_price_id: Option<String>,
     /// Where the customer portal sends people back to.
     pub stripe_return_url: Option<String>,
@@ -231,19 +235,113 @@ impl Config {
 
     /// True when this deployment charges for seats.
     ///
-    /// Both halves are required: a key with no webhook secret would
+    /// All three are required: a key with no webhook secret would
     /// take payments and never hear that they succeeded, which is a
-    /// worse state than not charging at all.
+    /// worse state than not charging at all, and a key with no price
+    /// has nothing to sell.
     pub fn bills(&self) -> bool {
         self.stripe_secret_key.is_some()
             && self.stripe_webhook_secret.is_some()
-            && self.stripe_price_id.is_some()
+            && !self.plans().is_empty()
+    }
+
+    /// Every plan this deployment can sell, cheapest first.
+    ///
+    /// Annual before monthly within a tier, because annual is the
+    /// cheaper per month and is what most people should pick; sync
+    /// before assistant, because it costs less.
+    ///
+    /// Only the ones with a price id configured appear. An operator
+    /// who set up annual sync and nothing else sells exactly that,
+    /// and the client is told so rather than offering a button that
+    /// fails.
+    pub fn plans(&self) -> Vec<PlanChoice> {
+        // The original single-price variable, treated as annual sync
+        // so an existing deployment keeps selling what it sold.
+        let sync_annual = self
+            .stripe_price_sync_annual
+            .as_deref()
+            .or(self.stripe_price_id.as_deref());
+
+        [
+            PlanChoice::new("sync-annual", "Sync, billed yearly", false, sync_annual),
+            PlanChoice::new(
+                "sync-monthly",
+                "Sync, billed monthly",
+                false,
+                self.stripe_price_sync_monthly.as_deref(),
+            ),
+            PlanChoice::new(
+                "assistant-annual",
+                "Sync and the assistant, billed yearly",
+                true,
+                self.stripe_price_assistant_annual.as_deref(),
+            ),
+            PlanChoice::new(
+                "assistant-monthly",
+                "Sync and the assistant, billed monthly",
+                true,
+                self.stripe_price_assistant_monthly.as_deref(),
+            ),
+        ]
+        .into_iter()
+        .flatten()
+        .collect()
+    }
+
+    /// The price a named plan buys, if this deployment sells it.
+    pub fn price_for(&self, plan: &str) -> Option<String> {
+        self.plans()
+            .into_iter()
+            .find(|p| p.id == plan)
+            .map(|p| p.price_id)
+    }
+
+    /// What a checkout uses when the caller named no plan.
+    ///
+    /// The first configured one, which the ordering above makes the
+    /// cheapest. A client too old to send a choice still buys
+    /// something sensible.
+    pub fn default_plan(&self) -> Option<PlanChoice> {
+        self.plans().into_iter().next()
     }
 
     /// True when the configured database is PostgreSQL.
     pub fn is_postgres(&self) -> bool {
         let url = self.database_url.trim_start();
         url.starts_with("postgres://") || url.starts_with("postgresql://")
+    }
+}
+
+/// One sellable plan, as the configuration describes it.
+///
+/// No amount: that is Stripe's to report, and a copy here could
+/// disagree with what the card is charged.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanChoice {
+    /// What the checkout call names.
+    pub id: &'static str,
+    /// What it is called on screen.
+    pub label: &'static str,
+    /// Whether the hosted assistant comes with it.
+    pub includes_assistant: bool,
+    /// The Stripe price it buys.
+    pub price_id: String,
+}
+
+impl PlanChoice {
+    fn new(
+        id: &'static str,
+        label: &'static str,
+        includes_assistant: bool,
+        price_id: Option<&str>,
+    ) -> Option<Self> {
+        price_id.map(|price_id| Self {
+            id,
+            label,
+            includes_assistant,
+            price_id: price_id.to_string(),
+        })
     }
 }
 

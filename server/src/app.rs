@@ -74,7 +74,6 @@ impl AppState {
             .then(|| {
                 crate::billing::stripe::Stripe::new(
                     config.stripe_secret_key.clone().unwrap_or_default(),
-                    config.stripe_price_id.clone().unwrap_or_default(),
                 )
             })
             .transpose()

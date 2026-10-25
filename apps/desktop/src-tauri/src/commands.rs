@@ -769,8 +769,11 @@ pub async fn sync_billing_checkout(
     service: State<'_, RelayService>,
     workspace_id: WorkspaceId,
     seats: Option<u32>,
+    plan: Option<String>,
 ) -> RelayResult<String> {
-    let url = service.sync_billing_checkout(workspace_id, seats).await?;
+    let url = service
+        .sync_billing_checkout(workspace_id, seats, plan)
+        .await?;
     open_externally(&app, &url)?;
     Ok(url)
 }

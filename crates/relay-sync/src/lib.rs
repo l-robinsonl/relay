@@ -35,7 +35,7 @@ pub mod auth;
 pub mod protocol;
 
 pub use auth::{
-    BillingView, Invitation, InvitationOffer, InvitationView, LoginRequest, LoginResponse,
+    BillingView, PlanOffer, Invitation, InvitationOffer, InvitationView, LoginRequest, LoginResponse,
     MemberView, Membership, Role, UserProfile,
 };
 pub use protocol::{

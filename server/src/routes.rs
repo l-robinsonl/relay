@@ -793,7 +793,43 @@ pub async fn billing_status(
         notice: entitlement.notice,
         has_subscription: subscription.is_some(),
         can_manage: membership.role == Role::Admin,
+        plans: offers(&state).await,
     }))
+}
+
+/// What this deployment can sell, with Stripe's own amounts.
+///
+/// A price Stripe will not report is left out rather than shown at
+/// zero: an operator with a wrong id should see a plan missing,
+/// which is a question, instead of a plan costing nothing, which is
+/// an answer and the wrong one.
+async fn offers(state: &AppState) -> Vec<relay_sync::PlanOffer> {
+    let Some(stripe) = state.stripe.as_ref() else {
+        return Vec::new();
+    };
+
+    let mut offers = Vec::new();
+    for choice in state.config.plans() {
+        match stripe.price(&choice.price_id).await {
+            Ok(detail) => offers.push(relay_sync::PlanOffer {
+                id: choice.id.to_string(),
+                label: choice.label.to_string(),
+                includes_assistant: choice.includes_assistant,
+                interval: detail.interval,
+                amount: detail.amount,
+                currency: detail.currency,
+            }),
+            Err(error) => {
+                tracing::error!(
+                    %error,
+                    plan = choice.id,
+                    price = choice.price_id,
+                    "a configured price could not be read; it will not be offered"
+                );
+            }
+        }
+    }
+    offers
 }
 
 /// How many seats to buy.
@@ -803,6 +839,13 @@ pub struct CheckoutRequest {
     /// Seats. Defaults to the current member count.
     #[serde(default)]
     pub seats: Option<u32>,
+    /// Which plan, by the id the billing view gave.
+    ///
+    /// Absent means the cheapest configured one, so a client too old
+    /// to send a choice still buys something sensible rather than
+    /// failing.
+    #[serde(default)]
+    pub plan: Option<String>,
 }
 
 /// Where to send the browser.
@@ -835,6 +878,24 @@ pub async fn billing_checkout(
         return Err(ServerError::Forbidden);
     }
 
+    // A plan this deployment does not sell is refused by name. The
+    // alternative — quietly selling the default instead — charges
+    // somebody for something they did not choose.
+    let plan = match &body.plan {
+        Some(wanted) => state.config.plans().into_iter().find(|p| p.id == wanted),
+        None => state.config.default_plan(),
+    }
+    .ok_or_else(|| {
+        let available: Vec<&str> = state.config.plans().into_iter().map(|p| p.id).collect();
+        ServerError::BadRequest(match body.plan.as_deref() {
+            Some(wanted) => format!(
+                "this server does not sell '{wanted}'. It sells: {}",
+                available.join(", ")
+            ),
+            None => "this server has no plans configured".to_string(),
+        })
+    })?;
+
     let members = state.store.member_count(&workspace_id).await?;
     let seats = body.seats.unwrap_or(members).max(members).max(1);
     let base = state.config.public_url.trim_end_matches('/');
@@ -842,14 +903,16 @@ pub async fn billing_checkout(
     let url = stripe
         .checkout_session(
             &workspace_id,
+            &plan.price_id,
             seats,
             &user.0.email,
             &format!("{base}/billing/done"),
             &format!("{base}/billing/cancelled"),
-            // Keyed on the workspace and the seat count, so a
-            // double-click returns the same session instead of
-            // starting a second subscription.
-            &format!("checkout:{workspace_id}:{seats}"),
+            // Keyed on the workspace, the plan and the seat count, so
+            // a double-click returns the same session instead of
+            // starting a second subscription — but changing your mind
+            // about the plan starts a new one.
+            &format!("checkout:{workspace_id}:{}:{seats}", plan.id),
         )
         .await?;
 

@@ -19,32 +19,42 @@ const API: &str = "https://api.stripe.com";
 pub struct Stripe {
     client: reqwest::Client,
     secret_key: String,
-    price_id: String,
+    /// Price details, read once each. Stripe's amounts are
+    /// immutable — a change means a new price id — so nothing here
+    /// can go stale.
+    prices: std::sync::Mutex<std::collections::HashMap<String, PriceDetail>>,
     base_url: String,
+}
+
+/// What a price costs, as Stripe reports it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PriceDetail {
+    /// Per seat, per interval, in the currency's smallest unit.
+    pub amount: i64,
+    /// ISO 4217, lower case.
+    pub currency: String,
+    /// `month` or `year`.
+    pub interval: String,
 }
 
 impl std::fmt::Debug for Stripe {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // No secret_key field: this ends up in spans and panics.
-        f.debug_struct("Stripe")
-            .field("price_id", &self.price_id)
-            .finish_non_exhaustive()
+        f.debug_struct("Stripe").finish_non_exhaustive()
     }
 }
 
 impl Stripe {
     /// Builds a client.
-    pub fn new(secret_key: impl Into<String>, price_id: impl Into<String>) -> ServerResult<Self> {
+    ///
+    /// No price: the prices live in the configuration, which knows
+    /// how many there are and what each one means. This knows how to
+    /// talk to Stripe.
+    pub fn new(secret_key: impl Into<String>) -> ServerResult<Self> {
         let secret_key = secret_key.into();
-        let price_id = price_id.into();
 
         if secret_key.trim().is_empty() {
             return Err(ServerError::Config("STRIPE_SECRET_KEY is empty".into()));
-        }
-        if price_id.trim().is_empty() {
-            return Err(ServerError::Config(
-                "STRIPE_PRICE_SEAT_ANNUAL must name the per-seat price to charge".into(),
-            ));
         }
 
         Ok(Self {
@@ -53,9 +63,39 @@ impl Stripe {
                 .build()
                 .map_err(|e| ServerError::Config(e.to_string()))?,
             secret_key,
-            price_id,
+            prices: Default::default(),
             base_url: API.into(),
         })
+    }
+
+    /// What a price actually costs, as Stripe reports it.
+    ///
+    /// Cached for the life of the process. A price is changed by
+    /// creating a new one — Stripe's own amounts are immutable — so
+    /// there is nothing to go stale, and the alternative is four API
+    /// calls every time somebody opens the billing panel.
+    pub async fn price(&self, price_id: &str) -> ServerResult<PriceDetail> {
+        if let Some(known) = self.prices.lock().ok().and_then(|p| p.get(price_id).cloned()) {
+            return Ok(known);
+        }
+
+        let body = self.get(&format!("/v1/prices/{price_id}")).await?;
+        let detail = PriceDetail {
+            // `unit_amount` is null for tiered pricing, which Relay
+            // does not sell. Zero is wrong but visible, where a
+            // guess would be wrong and plausible.
+            amount: body["unit_amount"].as_i64().unwrap_or(0),
+            currency: body["currency"].as_str().unwrap_or("gbp").to_string(),
+            interval: body["recurring"]["interval"]
+                .as_str()
+                .unwrap_or("month")
+                .to_string(),
+        };
+
+        if let Ok(mut cache) = self.prices.lock() {
+            cache.insert(price_id.to_string(), detail.clone());
+        }
+        Ok(detail)
     }
 
     /// Points the client at something other than Stripe.
@@ -73,9 +113,11 @@ impl Stripe {
     /// `idempotency` is the caller's guard against a double-click
     /// becoming two subscriptions: Stripe returns the first session
     /// again rather than making another.
+    #[allow(clippy::too_many_arguments)]
     pub async fn checkout_session(
         &self,
         workspace_id: &str,
+        price_id: &str,
         seats: u32,
         customer_email: &str,
         success_url: &str,
@@ -86,7 +128,7 @@ impl Stripe {
         let seats = seats.max(1).to_string();
         let form = [
             ("mode", "subscription"),
-            ("line_items[0][price]", self.price_id.as_str()),
+            ("line_items[0][price]", price_id),
             ("line_items[0][quantity]", seats.as_str()),
             ("success_url", success_url),
             ("cancel_url", cancel_url),
@@ -125,6 +167,31 @@ impl Stripe {
             .as_str()
             .map(str::to_string)
             .ok_or_else(|| ServerError::Stripe("returned a portal with no URL".into()))
+    }
+
+    /// A plain GET, for reading an object back.
+    async fn get(&self, path: &str) -> ServerResult<Value> {
+        let response = self
+            .client
+            .get(format!("{}{path}", self.base_url))
+            .bearer_auth(&self.secret_key)
+            .send()
+            .await
+            .map_err(|e| ServerError::Stripe(format!("could not be reached: {e}")))?;
+
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+
+        if !status.is_success() {
+            let detail = serde_json::from_str::<Value>(&body)
+                .ok()
+                .and_then(|v| v["error"]["message"].as_str().map(str::to_string))
+                .unwrap_or(body);
+            return Err(ServerError::Stripe(format!("{status}: {detail}")));
+        }
+
+        serde_json::from_str(&body)
+            .map_err(|e| ServerError::Stripe(format!("sent something unreadable: {e}")))
     }
 
     async fn post(
@@ -256,15 +323,17 @@ mod tests {
     use crate::billing::SubscriptionStatus;
 
     #[test]
-    fn a_client_needs_a_key_and_a_price() {
-        assert!(Stripe::new("", "price_1").is_err());
-        assert!(Stripe::new("sk_test_1", "  ").is_err());
-        assert!(Stripe::new("sk_test_1", "price_1").is_ok());
+    fn a_client_needs_a_key() {
+        // The prices moved to the configuration, which knows there
+        // are four of them and what each one means.
+        assert!(Stripe::new("").is_err());
+        assert!(Stripe::new("   ").is_err());
+        assert!(Stripe::new("sk_test_1").is_ok());
     }
 
     #[test]
     fn debug_output_does_not_contain_the_secret_key() {
-        let stripe = Stripe::new("sk_test_very_secret", "price_1").unwrap();
+        let stripe = Stripe::new("sk_test_very_secret").unwrap();
         assert!(!format!("{stripe:?}").contains("very_secret"));
     }
 

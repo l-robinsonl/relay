@@ -168,6 +168,32 @@ pub struct Invitation {
     pub accepted: bool,
 }
 
+/// One thing a workspace can buy on this deployment.
+///
+/// The amount comes from Stripe rather than from Relay's own
+/// settings. A figure typed into a config file is a figure that can
+/// disagree with the card charge, and the one place that must never
+/// happen is the button that takes the money.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PlanOffer {
+    /// Which offer, as the checkout call names it.
+    pub id: String,
+    /// What it is called on screen.
+    pub label: String,
+    /// Whether the hosted assistant comes with it.
+    pub includes_assistant: bool,
+    /// `month` or `year`, as Stripe spells it.
+    pub interval: String,
+    /// Per seat, per interval, in the currency's smallest unit —
+    /// pence for GBP. Stripe's own number, unrounded.
+    #[ts(type = "number")]
+    pub amount: i64,
+    /// ISO 4217, lower case, as Stripe returns it.
+    pub currency: String,
+}
+
 /// What a workspace is entitled to, as the client sees it.
 ///
 /// Shared rather than server-only: the billing panel has to render
@@ -197,6 +223,15 @@ pub struct BillingView {
     /// client from keeping a second copy of the rule, and a disabled
     /// button beats a 404 after the click.
     pub can_manage: bool,
+    /// What can be bought here, cheapest first.
+    ///
+    /// Comes from the server because only the server knows which
+    /// prices the operator configured: a deployment may sell sync
+    /// and not the assistant, or annual and not monthly, and a
+    /// client offering a plan the server cannot sell would fail
+    /// after the click.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub plans: Vec<PlanOffer>,
 }
 
 #[cfg(test)]

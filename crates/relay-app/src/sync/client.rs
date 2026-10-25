@@ -458,6 +458,7 @@ impl SyncClient {
         token: &str,
         workspace_id: &str,
         seats: Option<u32>,
+        plan: Option<String>,
     ) -> RelayResult<String> {
         let response = self
             .http
@@ -466,7 +467,7 @@ impl SyncClient {
                 self.base_url
             ))
             .bearer_auth(token)
-            .json(&serde_json::json!({ "seats": seats }))
+            .json(&serde_json::json!({ "seats": seats, "plan": plan }))
             .send()
             .await
             .map_err(transport_error)?;

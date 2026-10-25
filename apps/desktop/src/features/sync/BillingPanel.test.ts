@@ -14,6 +14,33 @@ vi.mock('@/services/ipc', () => ({
 
 const mocked = vi.mocked(api)
 
+const PLANS = [
+  {
+    id: 'sync-annual',
+    label: 'Sync, billed yearly',
+    includesAssistant: false,
+    interval: 'year',
+    amount: 2400,
+    currency: 'gbp',
+  },
+  {
+    id: 'sync-monthly',
+    label: 'Sync, billed monthly',
+    includesAssistant: false,
+    interval: 'month',
+    amount: 300,
+    currency: 'gbp',
+  },
+  {
+    id: 'assistant-annual',
+    label: 'Sync and the assistant, billed yearly',
+    includesAssistant: true,
+    interval: 'year',
+    amount: 6000,
+    currency: 'gbp',
+  },
+]
+
 function view (over: Partial<BillingView> = {}): BillingView {
   return {
     metered: true,
@@ -22,6 +49,7 @@ function view (over: Partial<BillingView> = {}): BillingView {
     active: true,
     hasSubscription: true,
     canManage: true,
+    plans: PLANS,
     ...over,
   }
 }
@@ -84,7 +112,7 @@ describe('BillingPanel', () => {
 
     // No seat count is sent: the server buys one for every member,
     // which is the only number that lets everyone keep working.
-    expect(mocked.syncBillingCheckout).toHaveBeenCalledWith('w1', null)
+    expect(mocked.syncBillingCheckout).toHaveBeenCalledWith('w1', null, 'sync-annual')
     expect(mocked.syncBillingPortal).not.toHaveBeenCalled()
   })
 
@@ -181,5 +209,84 @@ describe('BillingPanel', () => {
     await flushPromises()
 
     expect(mocked.syncBilling).not.toHaveBeenCalled()
+  })
+
+  describe('choosing a plan', () => {
+    const unsubscribed = { hasSubscription: false, seats: null, members: 1 }
+
+    it('is offered before there is a subscription', async () => {
+      mocked.syncBilling.mockResolvedValue(view(unsubscribed))
+      const wrapper = await panel()
+
+      expect(wrapper.findAll('input[type="radio"]')).toHaveLength(3)
+      expect(wrapper.text()).toContain('Sync, billed yearly')
+    })
+
+    it('is not offered once one is live', async () => {
+      // Changing plan on a live subscription is the portal's job,
+      // where proration is worked out. Offering it here would start
+      // a second subscription beside the first.
+      mocked.syncBilling.mockResolvedValue(view({ hasSubscription: true }))
+      const wrapper = await panel()
+
+      expect(wrapper.findAll('input[type="radio"]')).toHaveLength(0)
+    })
+
+    it('is offered again when renewing a cancelled subscription', async () => {
+      // A cancelled subscription still counts as having one, but the
+      // button below it buys rather than manages — so without this
+      // a renewal silently takes whatever the default is.
+      mocked.syncBilling.mockResolvedValue(
+        view({ hasSubscription: true, active: false }),
+      )
+      const wrapper = await panel()
+
+      expect(wrapper.findAll('input[type="radio"]')).toHaveLength(3)
+    })
+
+    it("shows Stripe's amounts, not a figure of our own", async () => {
+      mocked.syncBilling.mockResolvedValue(view(unsubscribed))
+      const wrapper = await panel()
+
+      // A yearly plan shows both: what leaves the account, and the
+      // monthly figure it is being compared against.
+      expect(wrapper.text()).toContain('£24.00 per person a year')
+      expect(wrapper.text()).toContain('£2.00 a month')
+      expect(wrapper.text()).toContain('£3.00 per person a month')
+    })
+
+    it('defaults to the first, which the server orders cheapest', async () => {
+      mocked.syncBilling.mockResolvedValue(view(unsubscribed))
+      const wrapper = await panel()
+
+      await wrapper.find('button.btn-primary').trigger('click')
+
+      expect(mocked.syncBillingCheckout).toHaveBeenCalledWith('w1', null, 'sync-annual')
+    })
+
+    it('buys the one that was picked', async () => {
+      mocked.syncBilling.mockResolvedValue(view(unsubscribed))
+      const wrapper = await panel()
+
+      const assistant = wrapper
+        .findAll('input[type="radio"]')
+        .find((input) => (input.element as HTMLInputElement).value === 'assistant-annual')
+      await assistant!.setValue()
+      await wrapper.find('button.btn-primary').trigger('click')
+
+      expect(mocked.syncBillingCheckout).toHaveBeenCalledWith('w1', null, 'assistant-annual')
+    })
+
+    it('a server selling one thing does not ask which', async () => {
+      // A radio group of one is a question with no answer to give.
+      mocked.syncBilling.mockResolvedValue(
+        view({ ...unsubscribed, plans: [PLANS[0]!] }),
+      )
+      const wrapper = await panel()
+
+      expect(wrapper.findAll('input[type="radio"]')).toHaveLength(0)
+      await wrapper.find('button.btn-primary').trigger('click')
+      expect(mocked.syncBillingCheckout).toHaveBeenCalledWith('w1', null, 'sync-annual')
+    })
   })
 })

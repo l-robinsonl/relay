@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { CreditCard, ExternalLink, Loader2, TriangleAlert } from '@lucide/vue'
-import type { BillingView } from '@relay/shared-types'
+import type { BillingView, PlanOffer } from '@relay/shared-types'
 import { api } from '@/services/ipc'
 
 const props = defineProps<{ workspaceId: string, open: boolean }>()
@@ -87,13 +87,51 @@ const needsMoreSeats = computed(() => {
   return view?.seats != null && view.members > view.seats
 })
 
+/**
+ * Which plan the person has picked, before there is a subscription.
+ *
+ * Null until the panel loads, then the first offer — which the
+ * server orders cheapest first, so the default is never the dearest
+ * thing on the list.
+ */
+const chosenPlan = ref<string | null>(null)
+
+watch(billing, (view) => {
+  if (!chosenPlan.value && view?.plans?.length) {
+    chosenPlan.value = view.plans[0]!.id
+  }
+})
+
+/**
+ * A plan's price, in the words a person uses.
+ *
+ * Both figures for a yearly plan: the amount that leaves the account
+ * and the monthly equivalent, because the second is the one being
+ * compared and the first is the one being charged.
+ */
+function priceOf (plan: PlanOffer): string {
+  const money = (minor: number) =>
+    new Intl.NumberFormat(undefined, {
+      style: 'currency',
+      currency: plan.currency.toUpperCase(),
+    }).format(minor / 100)
+
+  const each = `${money(plan.amount)} per person`
+  if (plan.interval !== 'year') return `${each} a month`
+  return `${each} a year — ${money(Math.round(plan.amount / 12))} a month`
+}
+
 async function buySeats () {
   working.value = true
   error.value = null
   try {
     // No seat count: the server buys one for every member, which is
     // the only count that lets everyone keep working.
-    openedUrl.value = await api.syncBillingCheckout(props.workspaceId, null)
+    openedUrl.value = await api.syncBillingCheckout(
+      props.workspaceId,
+      null,
+      chosenPlan.value,
+    )
     pollForTheResult()
   } catch (e) {
     error.value = messageOf(e)
@@ -101,6 +139,20 @@ async function buySeats () {
     working.value = false
   }
 }
+
+/**
+ * Whether the button below starts a fresh checkout.
+ *
+ * Not simply "has no subscription": a cancelled one is still a
+ * subscription and still falls through to a checkout, so a renewal
+ * must be offered the same choice as a first purchase. Tied to the
+ * same condition the action uses, because the two disagreeing is how
+ * somebody ends up buying a plan they were never shown.
+ */
+const buying = computed(() => {
+  const current = billing.value
+  return !!current && !(current.hasSubscription && current.active)
+})
 
 /** The one button, and what it does. */
 const action = computed(() => {
@@ -160,6 +212,39 @@ async function manage () {
       There are more people here than seats paid for. Nobody is locked out; buying the
       difference clears it.
     </p>
+
+    <!-- Only when the button below buys something. Changing plan on
+         a live subscription is Stripe's portal's job, where the
+         proration is worked out; offering it here would start a
+         second subscription beside the first. A cancelled one is not
+         live, so renewing gets the choice. -->
+    <fieldset
+      v-if="billing.canManage && buying && (billing.plans?.length ?? 0) > 1"
+      class="space-y-1"
+    >
+      <legend class="mb-1 text-xs text-muted">What to buy</legend>
+      <label
+        v-for="plan in billing.plans"
+        :key="plan.id"
+        class="flex cursor-pointer items-start gap-2 rounded border p-2 text-xs"
+        :style="{
+          borderColor: chosenPlan === plan.id ? 'var(--accent)' : 'var(--border-subtle)',
+          backgroundColor: chosenPlan === plan.id ? 'var(--accent-muted)' : 'transparent',
+        }"
+      >
+        <input
+          v-model="chosenPlan"
+          type="radio"
+          :value="plan.id"
+          name="relay-plan"
+          class="mt-0.5 shrink-0"
+        />
+        <span class="min-w-0">
+          <span class="block text-primary">{{ plan.label }}</span>
+          <span class="block text-muted">{{ priceOf(plan) }}</span>
+        </span>
+      </label>
+    </fieldset>
 
     <div v-if="billing.canManage" class="flex gap-2">
       <button

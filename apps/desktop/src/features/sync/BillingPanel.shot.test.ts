@@ -28,6 +28,33 @@ vi.mock('@/services/ipc', () => ({
 const mocked = vi.mocked(api)
 const OUT = process.env.RELAY_SHOTS_DIR ?? '/tmp/relay-shots'
 
+const PLANS = [
+  {
+    id: 'sync-annual',
+    label: 'Sync, billed yearly',
+    includesAssistant: false,
+    interval: 'year',
+    amount: 2400,
+    currency: 'gbp',
+  },
+  {
+    id: 'sync-monthly',
+    label: 'Sync, billed monthly',
+    includesAssistant: false,
+    interval: 'month',
+    amount: 300,
+    currency: 'gbp',
+  },
+  {
+    id: 'assistant-annual',
+    label: 'Sync and the assistant, billed yearly',
+    includesAssistant: true,
+    interval: 'year',
+    amount: 6000,
+    currency: 'gbp',
+  },
+]
+
 function view (over: Partial<BillingView> = {}): BillingView {
   return {
     metered: true,
@@ -36,6 +63,7 @@ function view (over: Partial<BillingView> = {}): BillingView {
     active: true,
     hasSubscription: true,
     canManage: true,
+    plans: PLANS,
     ...over,
   }
 }

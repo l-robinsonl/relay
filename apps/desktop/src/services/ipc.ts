@@ -347,8 +347,16 @@ export const api = {
     call<BillingView>('sync_billing', { workspaceId }),
   /** Opens Stripe's checkout in the system browser. Returns the URL it
    *  opened, so the panel can offer it as a link if nothing appeared. */
-  syncBillingCheckout: (workspaceId: string, seats?: number | null) =>
-    call<string>('sync_billing_checkout', { workspaceId, seats: seats ?? null }),
+  syncBillingCheckout: (
+    workspaceId: string,
+    seats?: number | null,
+    plan?: string | null,
+  ) =>
+    call<string>('sync_billing_checkout', {
+      workspaceId,
+      seats: seats ?? null,
+      plan: plan ?? null,
+    }),
   syncBillingPortal: (workspaceId: string) =>
     call<string>('sync_billing_portal', { workspaceId }),
 

@@ -1395,10 +1395,11 @@ impl RelayService {
         &self,
         workspace: WorkspaceId,
         seats: Option<u32>,
+        plan: Option<String>,
     ) -> RelayResult<String> {
         let (client, token) = self.sync_session(&workspace).await?;
         client
-            .billing_checkout(&token, workspace.as_str(), seats)
+            .billing_checkout(&token, workspace.as_str(), seats, plan)
             .await
     }
 
