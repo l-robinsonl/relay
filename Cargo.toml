@@ -15,7 +15,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 # The real floor, not an aspiration: sqlx 0.9 refuses to build below
 # this, which the container build found by pinning an older toolchain

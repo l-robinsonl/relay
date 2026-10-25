@@ -3576,7 +3576,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "relay-agent"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "axum",
@@ -3595,7 +3595,7 @@ dependencies = [
 
 [[package]]
 name = "relay-app"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "axum",
@@ -3629,7 +3629,7 @@ dependencies = [
 
 [[package]]
 name = "relay-core"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "percent-encoding",
  "relay-models",
@@ -3644,7 +3644,7 @@ dependencies = [
 
 [[package]]
 name = "relay-desktop"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "relay-agent",
  "relay-app",
@@ -3666,7 +3666,7 @@ dependencies = [
 
 [[package]]
 name = "relay-grpc"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "axum",
  "bytes",
@@ -3690,7 +3690,7 @@ dependencies = [
 
 [[package]]
 name = "relay-http"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "axum",
  "base64 0.23.1",
@@ -3716,7 +3716,7 @@ dependencies = [
 
 [[package]]
 name = "relay-models"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -3727,7 +3727,7 @@ dependencies = [
 
 [[package]]
 name = "relay-script"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "relay-models",
  "rquickjs",
@@ -3741,7 +3741,7 @@ dependencies = [
 
 [[package]]
 name = "relay-server"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "argon2",
  "async-trait",
@@ -3771,7 +3771,7 @@ dependencies = [
 
 [[package]]
 name = "relay-storage"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "relay-models",
  "rusqlite",
@@ -3785,7 +3785,7 @@ dependencies = [
 
 [[package]]
 name = "relay-sync"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "relay-models",
  "serde",
